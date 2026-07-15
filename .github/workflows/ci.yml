@@ -21,6 +21,62 @@ jobs:
       - run: pnpm run lint
       - run: pnpm run test
 
+  contract-gate:
+    runs-on: ubuntu-latest
+    services:
+      redpanda:
+        image: redpandadata/redpanda:v26.1.12
+        command:
+          - redpanda
+          - start
+          - --mode=dev-container
+          - --smp=1
+          - --memory=1G
+          - --kafka-addr=internal://0.0.0.0:29092,external://0.0.0.0:9092
+          - --advertise-kafka-addr=internal://redpanda:29092,external://localhost:9092
+          - --schema-registry-addr=0.0.0.0:8081
+        ports:
+          - 8081:8081
+        options: >-
+          --health-cmd='sh -c "curl -sf http://localhost:8081/subjects >/dev/null"'
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install
+      - name: Run contract gate
+        env:
+          SCHEMA_REGISTRY_URL: http://localhost:8081
+        run: |
+          set -euo pipefail
+
+          changed_files="$(git diff --name-only origin/main... -- schemas/)"
+          if [ -z "$changed_files" ]; then
+            echo "no schema changes"
+            exit 0
+          fi
+
+          temp_dir="$(mktemp -d)"
+          git clone --depth 1 "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "$temp_dir/main-repo"
+          git -C "$temp_dir/main-repo" checkout origin/main -- schemas/
+
+          SCHEMA_REGISTRY_URL="$SCHEMA_REGISTRY_URL" SCHEMA_DIR="$temp_dir/main-repo/schemas" \
+            pnpm --dir scripts run schemas
+
+          mapfile -t changed_file_args <<< "$changed_files"
+
+          SCHEMA_REGISTRY_URL="$SCHEMA_REGISTRY_URL" pnpm --dir scripts run check-compat -- "${changed_file_args[@]}"
+
   java-build-test:
     runs-on: ubuntu-latest
     steps:
