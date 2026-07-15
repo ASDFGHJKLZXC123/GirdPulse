@@ -4,13 +4,6 @@
   "namespace": "com.gridpulse.events",
   "fields": [
     {
-      "name": "event_id",
-      "type": {
-        "type": "string",
-        "logicalType": "uuid"
-      }
-    },
-    {
       "name": "vehicle_id",
       "type": "string"
     },
@@ -39,7 +32,11 @@
       "type": {
         "type": "enum",
         "name": "VehicleStatus",
-        "symbols": ["ACTIVE", "IDLE", "OFFLINE"]
+        "symbols": [
+          "ACTIVE",
+          "IDLE",
+          "OFFLINE"
+        ]
       }
     },
     {
