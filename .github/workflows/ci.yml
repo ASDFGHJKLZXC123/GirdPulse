@@ -29,7 +29,7 @@ jobs:
         ports:
           - 8081:8081
         options: >-
-          --health-cmd='curl -sf http://localhost:8081/subjects >/dev/null'
+          --health-cmd "curl -sf http://localhost:8081/subjects"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
