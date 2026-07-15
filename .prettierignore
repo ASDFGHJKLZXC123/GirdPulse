@@ -1,0 +1,9 @@
+.run/
+.logs/
+node_modules/
+dist/
+build/
+pnpm-lock.yaml
+
+# Markdown is out of scope for this milestone's tooling pass (see M00 task constraints).
+*.md

@@ -1,0 +1,7 @@
+packages:
+  - simulator
+  - projector
+  - api
+  - ui
+  - e2e
+  - scripts

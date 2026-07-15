@@ -1,0 +1,18 @@
+node_modules/
+dist/
+build/
+.run/
+.logs/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# Gradle
+streams/.gradle/
+streams/**/build/
+
+# IDE
+.idea/
+.vscode/
