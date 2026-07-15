@@ -26,15 +26,6 @@ jobs:
     services:
       redpanda:
         image: redpandadata/redpanda:v26.1.12
-        command:
-          - redpanda
-          - start
-          - --mode=dev-container
-          - --smp=1
-          - --memory=1G
-          - --kafka-addr=internal://0.0.0.0:29092,external://0.0.0.0:9092
-          - --advertise-kafka-addr=internal://redpanda:29092,external://localhost:9092
-          - --schema-registry-addr=0.0.0.0:8081
         ports:
           - 8081:8081
         options: >-
