@@ -120,6 +120,10 @@ async function getVersionInfo(subject: string, version: number): Promise<Version
 
 async function processSubject(mapping: Mapping): Promise<void> {
   const matched = await schemasByPrefix(mapping.prefix);
+  if (matched.length === 0) {
+    return;
+  }
+
   await setCompatibility(mapping.subject);
 
   for (const schema of matched) {
