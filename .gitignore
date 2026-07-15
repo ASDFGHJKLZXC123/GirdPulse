@@ -16,3 +16,6 @@ streams/**/build/
 # IDE
 .idea/
 .vscode/
+
+# scripts/run.sh writes PID files and log files under these two dirs (see M00 spec §3a);
+# they are process-local and must never be committed.
