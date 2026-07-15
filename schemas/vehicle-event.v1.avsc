@@ -39,7 +39,11 @@
       "type": {
         "type": "enum",
         "name": "VehicleStatus",
-        "symbols": ["ACTIVE", "IDLE", "OFFLINE"]
+        "symbols": [
+          "ACTIVE",
+          "IDLE",
+          "OFFLINE"
+        ]
       }
     },
     {
@@ -48,6 +52,14 @@
         "type": "long",
         "logicalType": "timestamp-millis"
       }
+    },
+    {
+      "name": "test_field",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
     }
   ]
 }
