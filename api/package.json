@@ -1,0 +1,9 @@
+{
+  "name": "@gridpulse/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"no tests yet\" && exit 0"
+  }
+}
