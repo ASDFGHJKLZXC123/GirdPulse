@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { access, readFile, readdir } from 'node:fs/promises';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 
 // Canonical M01 contract: only register-schemas.ts registers new schema versions.
 // Consumers must pin an explicit reader schema file; no directory-level schema globs.
@@ -11,6 +12,9 @@ const SCHEMA_DIR = resolve(
       ? join(process.cwd(), '..', 'schemas')
       : join(process.cwd(), 'schemas')),
 );
+const REPO_ROOT = basename(process.cwd()) === 'scripts'
+  ? resolve(process.cwd(), '..')
+  : process.cwd();
 
 type CompatibilityResponse = {
   is_compatible: boolean;
@@ -44,8 +48,28 @@ async function allSchemaFiles(): Promise<string[]> {
     .map((name) => join(SCHEMA_DIR, name));
 }
 
+async function resolveSchemaPath(file: string): Promise<string> {
+  if (isAbsolute(file)) {
+    return file;
+  }
+
+  const repoRelative = resolve(REPO_ROOT, file);
+  const cwdRelative = resolve(process.cwd(), file);
+
+  try {
+    await access(repoRelative);
+    return repoRelative;
+  } catch {
+    // If it's not under repo root, fall back to repo-relative command's cwd.
+  }
+
+  await access(cwdRelative);
+  return cwdRelative;
+}
+
 async function fetchCompat(file: string, subject: string): Promise<boolean> {
-  const schema = await readFile(file, 'utf-8');
+  const schemaPath = await resolveSchemaPath(file);
+  const schema = await readFile(schemaPath, 'utf-8');
   const response = await fetch(
     `${REGISTRY_URL}/compatibility/subjects/${encodeURIComponent(subject)}/versions/latest`,
     {
