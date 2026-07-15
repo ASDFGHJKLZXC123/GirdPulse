@@ -1,4 +1,4 @@
-.PHONY: up down topics schemas stop-apps e2e-clean
+.PHONY: up down topics schemas stop-apps sim e2e-clean
 
 up:        ## start infra
 	docker compose up -d --wait
@@ -13,6 +13,11 @@ topics:    ## idempotent topic creation — create only if absent (no `|| true`:
 
 schemas:   ## register schema files to local Schema Registry
 	pnpm --dir scripts run schemas
+
+sim:      ## run simulator in the background through launcher (returns after first emit)
+	@mkdir -p .logs
+	@: > .logs/sim.log
+	./scripts/run.sh sim "grep -q 'ready: first event produced' .logs/sim.log" -- pnpm --dir simulator start
 
 stop-apps: ## kill every PID in .run/, remove the PID files; safe when nothing runs
 	@if [ -d .run ]; then \

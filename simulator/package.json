@@ -4,6 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "echo \"no tests yet\" && exit 0"
+    "start": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kafkajs/confluent-schema-registry": "^3.3.0",
+    "kafkajs": "^2.2.4",
+    "seedrandom": "^3.0.5"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.1",
+    "vitest": "^3.2.4"
   }
 }
