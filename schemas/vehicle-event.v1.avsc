@@ -1,0 +1,53 @@
+{
+  "type": "record",
+  "name": "VehicleEvent",
+  "namespace": "com.gridpulse.events",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      }
+    },
+    {
+      "name": "vehicle_id",
+      "type": "string"
+    },
+    {
+      "name": "region",
+      "type": "string"
+    },
+    {
+      "name": "lat",
+      "type": "double"
+    },
+    {
+      "name": "lon",
+      "type": "double"
+    },
+    {
+      "name": "speed_kph",
+      "type": "double"
+    },
+    {
+      "name": "heading_deg",
+      "type": "double"
+    },
+    {
+      "name": "status",
+      "type": {
+        "type": "enum",
+        "name": "VehicleStatus",
+        "symbols": ["ACTIVE", "IDLE", "OFFLINE"]
+      }
+    },
+    {
+      "name": "occurred_at",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      }
+    }
+  ]
+}

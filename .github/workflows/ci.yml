@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
   ts-lint-test:
@@ -20,6 +21,90 @@ jobs:
       - run: pnpm install
       - run: pnpm run lint
       - run: pnpm run test
+
+  contract-gate:
+    runs-on: ubuntu-latest
+    services:
+      redpanda:
+        image: redpandadata/redpanda:v26.1.12
+        ports:
+          - 8081:8081
+        options: >-
+          --health-cmd "curl -sf http://localhost:8081/subjects"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install
+      - name: Run contract gate
+        env:
+          SCHEMA_REGISTRY_URL: http://localhost:8081
+        run: |
+          set -euo pipefail
+
+          event_name="${GITHUB_EVENT_NAME}"
+          if [ "$event_name" = "pull_request" ]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            base_ref="${{ github.base_ref }}"
+            echo "base_ref=$base_ref"
+            echo "base_sha=$base_sha"
+          elif [ "$event_name" = "push" ]; then
+            base_sha="${{ github.event.before }}"
+            echo "before_sha=$base_sha"
+          else
+            echo "unsupported event type: $event_name"
+            exit 1
+          fi
+
+          if [ -z "$base_sha" ]; then
+            echo "baseline sha is empty"
+            exit 1
+          fi
+
+          empty_tree_sha="$(git hash-object -t tree /dev/null)"
+          zero_sha="0000000000000000000000000000000000000000"
+          if [ "$event_name" = "push" ] && [ "$base_sha" = "$zero_sha" ]; then
+            baseline_is_empty_tree=true
+          else
+            if ! git cat-file -e "${base_sha}^{commit}"; then
+              echo "failed to resolve baseline commit $base_sha"
+              exit 1
+            fi
+            baseline_is_empty_tree=false
+          fi
+
+          if [ "$baseline_is_empty_tree" = true ]; then
+            changed_files="$(git diff --name-only "$empty_tree_sha" HEAD -- schemas/)"
+          else
+            changed_files="$(git diff --name-only "$base_sha"...HEAD -- schemas/)"
+          fi
+
+          if [ -z "$changed_files" ]; then
+            echo "no schema changes"
+            exit 0
+          fi
+
+          temp_dir="$(mktemp -d)"
+          if [ "$baseline_is_empty_tree" = false ]; then
+            git archive "$base_sha" schemas | tar -x -C "$temp_dir"
+
+            SCHEMA_REGISTRY_URL="$SCHEMA_REGISTRY_URL" SCHEMA_DIR="$temp_dir/schemas" \
+              pnpm --dir scripts run schemas
+          fi
+
+          mapfile -t changed_file_args <<< "$changed_files"
+
+          SCHEMA_REGISTRY_URL="$SCHEMA_REGISTRY_URL" pnpm --dir scripts run check-compat -- "${changed_file_args[@]}"
 
   java-build-test:
     runs-on: ubuntu-latest

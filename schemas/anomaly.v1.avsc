@@ -1,0 +1,52 @@
+{
+  "type": "record",
+  "name": "Anomaly",
+  "namespace": "com.gridpulse.events",
+  "fields": [
+    {
+      "name": "anomaly_id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      }
+    },
+    {
+      "name": "vehicle_id",
+      "type": "string"
+    },
+    {
+      "name": "region",
+      "type": "string"
+    },
+    {
+      "name": "kind",
+      "type": {
+        "type": "enum",
+        "name": "AnomalyKind",
+        "symbols": ["SPEED_THRESHOLD", "SPEED_ZSCORE"]
+      }
+    },
+    {
+      "name": "value",
+      "type": "double"
+    },
+    {
+      "name": "detector_version",
+      "type": "int"
+    },
+    {
+      "name": "window_start",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      }
+    },
+    {
+      "name": "window_end",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      }
+    }
+  ]
+}

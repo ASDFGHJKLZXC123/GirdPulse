@@ -1,0 +1,37 @@
+{
+  "type": "record",
+  "name": "RegionRollup",
+  "namespace": "com.gridpulse.events",
+  "fields": [
+    {
+      "name": "region",
+      "type": "string"
+    },
+    {
+      "name": "window_start",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      }
+    },
+    {
+      "name": "window_end",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      }
+    },
+    {
+      "name": "event_count",
+      "type": "long"
+    },
+    {
+      "name": "active_vehicles",
+      "type": "int"
+    },
+    {
+      "name": "avg_speed_kph",
+      "type": "double"
+    }
+  ]
+}
