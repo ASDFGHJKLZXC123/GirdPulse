@@ -1,4 +1,4 @@
-.PHONY: up down topics schemas stop-apps sim e2e-clean
+.PHONY: up down topics schemas jobs stop-apps sim e2e-clean
 
 up:        ## start infra
 	docker compose up -d --wait
@@ -18,6 +18,9 @@ sim:      ## run simulator in the background through launcher (returns after fir
 	@mkdir -p .logs
 	@: > .logs/sim.log
 	./scripts/run.sh sim "grep -q 'ready: first event produced' .logs/sim.log" -- pnpm --dir simulator start
+
+jobs:      ## launch stream jobs as their own background processes (PID file + log, RUNNING-state readiness)
+	scripts/run.sh anomaly-job 'grep -q "State transition.*to RUNNING" .logs/anomaly-job.log' -- streams/gradlew -p streams :anomaly-job:run
 
 stop-apps: ## kill every PID in .run/, remove the PID files; safe when nothing runs
 	@if [ -d .run ]; then \
