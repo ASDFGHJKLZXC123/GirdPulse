@@ -64,6 +64,25 @@ class SequenceRng {
   };
 }
 
+type RngPlanByTick = Map<number, number[]>;
+
+function createTickAwareRng(plan: RngPlanByTick): { setTick: (tick: number) => void; next: () => number } {
+  let currentTick = 0;
+  let callInTick = 0;
+  return {
+    setTick: (tick: number) => {
+      currentTick = tick;
+      callInTick = 0;
+    },
+    next: () => {
+      const bucket = plan.get(currentTick) ?? [];
+      const value = bucket[callInTick];
+      callInTick += 1;
+      return value ?? 0.5;
+    },
+  };
+}
+
 describe('simulator config', () => {
   it('honors defaults and parses env', () => {
     const config = loadConfig({});
@@ -299,6 +318,54 @@ describe('injection semantics', () => {
         expect(fastEvents[tick].speed).toBeLessThanOrEqual(80);
       }
     }
+  });
+
+  it('spikes defer transition for 5 ticks and resume on tick 6', () => {
+    const config = configWith({
+      seed: 'spikes-deferred',
+      vehicles: 1,
+      inject: new Set(['spikes']),
+      tickMs: 1000,
+    });
+    const rng = createTickAwareRng(
+      new Map([
+        // At tick 61, a 0.01 first random would force ACTIVE->IDLE if transition was evaluated.
+        [61, [0.01]],
+        // At tick 65, resume transition logic and force ACTIVE->IDLE.
+        [65, [0.01]],
+      ]),
+    );
+    const engine = new SimulatorEngine(config, rng.next);
+
+    const eventsByTick: VehicleEvent[] = [];
+    for (let tick = 0; tick < 66; tick++) {
+      rng.setTick(tick);
+      const nowMs = 1_000 + tick * config.tickMs;
+      const [event] = engine.tick(nowMs).events;
+      eventsByTick.push(event);
+    }
+
+    const first = eventsByTick[60];
+    const tail = eventsByTick[64];
+
+    for (let tick = 60; tick < 65; tick += 1) {
+      const event = eventsByTick[tick];
+      expect(event.status).toBe('ACTIVE');
+      expect(event.speed_kph).toBeGreaterThanOrEqual(150);
+      expect(event.speed_kph).toBeLessThanOrEqual(300);
+      if (tick > 60) {
+        const previous = eventsByTick[tick - 1];
+        const delta = Math.abs(event.lat - previous.lat) + Math.abs(event.lon - previous.lon);
+        expect(delta).toBeGreaterThan(0);
+      }
+    }
+
+    expect(first.speed_kph).toBeGreaterThanOrEqual(150);
+    expect(tail.speed_kph).toBeGreaterThanOrEqual(150);
+
+    const resumedTransitionEvent = eventsByTick[65];
+    expect(resumedTransitionEvent.status).toBe('IDLE');
+    expect(resumedTransitionEvent.speed_kph).toBe(0);
   });
 
   it('teleport: ~0.5% events jump to a new in-region position', () => {

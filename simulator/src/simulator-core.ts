@@ -230,7 +230,7 @@ function moveVehicle(
   rng: () => number,
   forceSpiked: boolean,
 ): { speedKph: number; lat: number; lon: number; headingDeg: number } {
-  if (state.status !== 'ACTIVE') {
+  if (!forceSpiked && state.status !== 'ACTIVE') {
     return {
       speedKph: 0,
       lat: state.lat,
@@ -356,6 +356,15 @@ export class SimulatorEngine {
     return this.config.inject.has(flag);
   }
 
+  private isSpikeVehicle(vehicleId: string): boolean {
+    return (
+      this.shouldInject('spikes') &&
+      this.spikeVehicleState !== null &&
+      this.spikeVehicleState.vehicleId === vehicleId &&
+      this.spikeVehicleState.remainingTicks > 0
+    );
+  }
+
   private maybeStartSpikes(): void {
     if (!this.shouldInject('spikes')) {
       return;
@@ -372,7 +381,7 @@ export class SimulatorEngine {
   }
 
   private applyMovement(state: VehicleState): { speedKph: number; lat: number; lon: number; headingDeg: number } {
-    const forceSpiked = this.shouldInject('spikes') && this.spikeVehicleState?.vehicleId === state.vehicleId && this.spikeVehicleState.remainingTicks > 0;
+    const forceSpiked = this.isSpikeVehicle(state.vehicleId);
     const movement = moveVehicle(state, this.config.tickMs, this.rng, forceSpiked);
     if (forceSpiked && this.spikeVehicleState) {
       this.spikeVehicleState.remainingTicks -= 1;
@@ -389,14 +398,20 @@ export class SimulatorEngine {
 
     for (const vehicle of this.vehicles) {
       const before = cloneState(vehicle);
-      applyTransition(vehicle, this.rng);
+      const isSpiked = this.isSpikeVehicle(vehicle.vehicleId);
+      if (!isSpiked) {
+        applyTransition(vehicle, this.rng);
+      }
 
       const movement = this.applyMovement(vehicle);
+      if (isSpiked) {
+        vehicle.status = 'ACTIVE';
+      }
       vehicle.headingDeg = movement.headingDeg;
       vehicle.lat = movement.lat;
       vehicle.lon = movement.lon;
 
-      if (vehicle.status !== 'ACTIVE') {
+      if (!isSpiked && vehicle.status !== 'ACTIVE') {
         vehicle.speedKph = 0;
       } else {
         vehicle.speedKph = movement.speedKph;
@@ -419,7 +434,7 @@ export class SimulatorEngine {
         region: vehicle.region.code,
         lat: vehicle.lat,
         lon: vehicle.lon,
-        speed_kph: vehicle.status === 'ACTIVE' ? clamp(vehicle.speedKph, 0, 500) : 0,
+        speed_kph: clamp(vehicle.speedKph, 0, 500),
         heading_deg: vehicle.headingDeg,
         status: vehicle.status,
         occurred_at: Math.trunc(occurredAt),

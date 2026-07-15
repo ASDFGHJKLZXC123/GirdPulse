@@ -1,4 +1,4 @@
-import { Kafka } from 'kafkajs';
+import { Kafka, Partitioners } from 'kafkajs';
 import { SchemaRegistry } from '@kafkajs/confluent-schema-registry';
 import { SimulatorEngine, loadConfig } from './simulator-core';
 
@@ -36,7 +36,9 @@ async function run(): Promise<void> {
     clientId: 'gridpulse-simulator',
     brokers: config.brokers,
   });
-  const producer = kafka.producer();
+  const producer = kafka.producer({
+    createPartitioner: Partitioners.DefaultPartitioner,
+  });
   await producer.connect();
 
   let running = true;
