@@ -1,5 +1,5 @@
 // Canonical M01 contract: all registration is performed only via this script.
-// Upstream producers/consumers must not auto-register; they should rely on existing subjects.
+// Upstream producers/consumers must set `auto.register.schemas=false` and rely on existing subjects.
 
 import { readFile, readdir } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';

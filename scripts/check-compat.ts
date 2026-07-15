@@ -2,6 +2,9 @@ import { access, readFile, readdir } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 
 // Canonical M01 contract: only register-schemas.ts registers new schema versions.
+// Upstream producers/consumers must set `auto.register.schemas=false`.
+// Filename→subject mapping: vehicle-event→fleet.vehicle-events-value,
+// anomaly→fleet.anomalies-value, region-rollup→fleet.rollups.region-1m-value.
 // Consumers must pin an explicit reader schema file; no directory-level schema globs.
 
 const REGISTRY_URL = process.env.SCHEMA_REGISTRY_URL ?? 'http://localhost:8081';
