@@ -14,7 +14,9 @@ import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import io.confluent.kafka.serializers.KafkaAvroSerializerConfig;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
@@ -45,10 +47,20 @@ import org.testcontainers.redpanda.RedpandaContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Integration test against a real Redpanda broker + Schema Registry (Testcontainers). Registers both
- * v1 subjects, runs the actual EOS-v2 topology, produces a spike burst plus a trailing flush event
- * past window-end + grace, and asserts decoded {@link Anomaly} records land on {@code fleet.anomalies}
- * with no duplicate {@code (vehicle_id, window_start)} pairs.
+ * Integration test against a real Redpanda broker + Schema Registry (Testcontainers).
+ *
+ * <p>It registers the <b>canonical repo-root AVSC text</b> for both subjects (never the generated
+ * {@code getClassSchema()} output) and drives the real EOS-v2 topology with the production serde
+ * config, so it exercises — rather than masks — the canonical-schema-identity path: with
+ * {@code auto.register.schemas=false}, serialization succeeds only because
+ * {@code avro.remove.java.properties=true} strips the generated {@code avro.java.string} properties
+ * absent from the canonical schema. Remove that config and this test fails with registry 40403, the
+ * exact production failure class.
+ *
+ * <p>Produces a 3-spike burst plus a same-key above-threshold final clock control past the latest
+ * asserted containing hopping window's end + grace, then asserts ≥ 1 decoded {@link Anomaly} on
+ * {@code fleet.anomalies} with no duplicate {@code (vehicle_id, window_start)} pairs. The control's own
+ * far-future window never closes, so no control-only window is emitted or asserted.
  */
 @Testcontainers
 class AnomalyIntegrationTest {
@@ -107,10 +119,18 @@ class AnomalyIntegrationTest {
         }
     }
 
+    /**
+     * Register the canonical repository-root AVSC text under the two value subjects — deliberately NOT
+     * {@code getClassSchema()}, whose generated {@code avro.java.string} properties would otherwise be
+     * registered and mask the production schema-identity mismatch.
+     */
     private static void registerSchemas(String registry) throws Exception {
+        final Path schemasDir = Path.of(System.getProperty("gridpulse.schemas.dir"));
+        final String vehicleEventSchema = Files.readString(schemasDir.resolve("vehicle-event.v1.avsc"));
+        final String anomalySchema = Files.readString(schemasDir.resolve("anomaly.v1.avsc"));
         final SchemaRegistryClient client = new CachedSchemaRegistryClient(registry, 10);
-        client.register(AnomalyTopology.INPUT_TOPIC + "-value", new AvroSchema(VehicleEvent.getClassSchema()));
-        client.register(AnomalyTopology.OUTPUT_TOPIC + "-value", new AvroSchema(Anomaly.getClassSchema()));
+        client.register(AnomalyTopology.INPUT_TOPIC + "-value", new AvroSchema(vehicleEventSchema));
+        client.register(AnomalyTopology.OUTPUT_TOPIC + "-value", new AvroSchema(anomalySchema));
     }
 
     private static void produceInput(String bootstrap, String registry) {
@@ -120,15 +140,20 @@ class AnomalyIntegrationTest {
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class.getName());
         props.put(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, registry);
         props.put(AbstractKafkaSchemaSerDeConfig.AUTO_REGISTER_SCHEMAS, false);
+        // Match production: strip generated avro.java.string so the input matches the canonical
+        // vehicle-events-value subject under auto.register.schemas=false.
+        props.put(KafkaAvroSerializerConfig.AVRO_REMOVE_JAVA_PROPS_CONFIG, true);
 
         try (KafkaProducer<String, VehicleEvent> producer = new KafkaProducer<>(props)) {
-            // Three spikes in one window burst, same key -> same partition/task.
+            // Three spikes in one hopping-window burst, same key -> same partition/task.
             producer.send(record(VEHICLE, 150.0, BASE + 1 * SEC));
             producer.send(record(VEHICLE, 155.0, BASE + 2 * SEC));
             producer.send(record(VEHICLE, 160.0, BASE + 3 * SEC));
-            // Trailing flush event past window-end + grace: > 120 and same key so it reaches the
-            // suppress node on the burst's partition and evicts the burst's closed windows. Its own
-            // far-future window never closes, so it emits nothing.
+            // Final same-key above-threshold clock control, strictly beyond the latest asserted
+            // containing hopping window's end + grace. It routes through the same task/partition to
+            // advance stream time and flush the burst's closed windows; its own far-future window
+            // never closes, so no control-only window is emitted. This control is test mechanics only,
+            // not one of the simulator's five ACTIVE spike events.
             producer.send(record(VEHICLE, 200.0, FLUSH_TS));
             producer.flush();
         }
@@ -182,10 +207,13 @@ class AnomalyIntegrationTest {
     }
 
     private static Map<String, Object> serdeConfig(String registry) {
+        // Mirror the production serde config, including avro.remove.java.properties=true, so the
+        // topology's Anomaly serializer matches the canonical anomalies-value subject.
         return Map.of(
                 AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, registry,
                 AbstractKafkaSchemaSerDeConfig.AUTO_REGISTER_SCHEMAS, false,
-                KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
+                KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true,
+                KafkaAvroSerializerConfig.AVRO_REMOVE_JAVA_PROPS_CONFIG, true);
     }
 
     private static Properties streamsConfig(String bootstrap, String registry) throws Exception {

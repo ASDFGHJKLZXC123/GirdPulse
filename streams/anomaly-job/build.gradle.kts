@@ -68,6 +68,10 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+    // The integration test registers the CANONICAL repo-root AVSC text (not generated class schemas)
+    // so it exercises the real production schema-identity path. Point it at the same repo-root schemas
+    // the Avro plugin reads.
+    systemProperty("gridpulse.schemas.dir", "$rootDir/../schemas")
     // Docker Engine >= 29 raised its minimum API version above docker-java's default probe version,
     // which makes Testcontainers' client discovery fail with HTTP 400 on some local Docker Desktop
     // setups. Exporting DOCKER_API_VERSION pins docker-java (via its `api.version` system property)
