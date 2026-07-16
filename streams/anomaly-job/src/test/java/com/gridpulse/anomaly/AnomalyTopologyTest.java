@@ -28,20 +28,24 @@ import org.junit.jupiter.api.Test;
 /**
  * TopologyTestDriver (unit, no broker) coverage of the anomaly topology.
  *
- * <p><b>Suppress-flush mechanics (verified empirically for this filter-before-window topology):</b>
- * {@code suppress(untilWindowCloses)} only emits a buffered window when a record actually traverses
- * the suppress node and carries stream time past that window's close. The topology filters
- * non-violating events ({@code speed <= 120}) BEFORE the windowed aggregate, so a {@code <= 120}
- * "clock" event never reaches suppress and cannot flush it — although it DOES advance task stream
- * time (which is what governs window expiry for late records). Therefore:
- * <ul>
- *   <li>Grace tests advance stream time with a filtered {@code <= 120} trailing event.</li>
- *   <li>Tests that must observe emitted anomalies flush with a final {@code > 120} event on the
- *       SAME vehicle key at a far-future timestamp — it reaches suppress and evicts the burst's
- *       closed windows, while its own far-future window (never closed) emits nothing and shares no
- *       window with the burst.</li>
- * </ul>
- * Every test still pipes a trailing event beyond {@code window_end + grace} to advance stream time.
+ * <p><b>Clock-control rule (CCR-006), for this strict-filter-before-hopping-window topology:</b>
+ * because {@code filter(speed_kph > 120.0)} precedes the window and {@code suppress(untilWindowCloses)},
+ * only above-threshold records reach the windowed aggregate and suppress operators. Two distinct clocks
+ * matter: the windowed aggregate's own observed stream time (advanced only by records that PASS the
+ * filter, governing window expiry for late records) and the suppress node's stream time (advanced only
+ * by records that TRAVERSE suppress, governing flush). A {@code <= 120} event reaches neither, so it
+ * can neither expire a window nor flush suppress. Therefore every fixture record that must reach the
+ * post-filter window/suppress path is an above-threshold clock control that: (1) is keyed to the same
+ * vehicle as the asserted burst (same task/partition), (2) lies outside every asserted target window,
+ * and (3) is excluded from assertions for its own later control-only window (which never closes and so
+ * never emits). A final suppress-flush control is timestamped strictly beyond the latest asserted
+ * containing hopping window's {@code window_end + 30s grace}. Intermediate controls that position stream
+ * time for the within-grace / post-grace tests follow the same rules, timestamped on the required side
+ * of the asserted window's close. Clock controls are test mechanics, not part of the simulator's
+ * five-event ACTIVE spike burst.
+ *
+ * <p>Test (a) is the sole exception: its suppress buffer is empty (every speed ≤ 120), so it
+ * intentionally retains a final non-spike clock event and asserts no output.
  *
  * <p><b>Hopping caveat:</b> a single spike at {@code t} falls into up to 5 overlapping 5-min windows
  * (advance 1 min) ⇒ up to 5 anomalies is correct. Assertions check per-window uniqueness, never a
