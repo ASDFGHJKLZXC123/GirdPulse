@@ -1,4 +1,4 @@
-.PHONY: up down topics schemas stop-apps sim e2e-clean
+.PHONY: up down topics schemas jobs stop-apps sim e2e-clean
 
 up:        ## start infra
 	docker compose up -d --wait
@@ -18,6 +18,16 @@ sim:      ## run simulator in the background through launcher (returns after fir
 	@mkdir -p .logs
 	@: > .logs/sim.log
 	./scripts/run.sh sim "grep -q 'ready: first event produced' .logs/sim.log" -- pnpm --dir simulator start
+
+jobs:      ## launch each stream job as its OWN process via the launcher (PID file + log, RUNNING-state readiness)
+	@mkdir -p .logs
+	@: > .logs/anomaly-job.log
+	streams/gradlew -p streams :anomaly-job:installDist -q
+	# Launch the installed app image directly (not `gradlew run`): the recorded PID is then the real
+	# Streams JVM, so `make stop-apps` SIGTERM triggers its shutdown hook (streams.close(), leaving the
+	# consumer group) and reliably terminates it — `gradlew run` instead forks the JVM as a Gradle
+	# daemon child that the recorded wrapper PID does not own, leaving the descendant alive on stop.
+	scripts/run.sh anomaly-job 'grep -q "State transition.*to RUNNING" .logs/anomaly-job.log' -- streams/anomaly-job/build/install/anomaly-job/bin/anomaly-job
 
 stop-apps: ## kill every PID in .run/, remove the PID files; safe when nothing runs
 	@if [ -d .run ]; then \
