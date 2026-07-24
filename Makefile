@@ -22,12 +22,14 @@ sim:      ## run simulator in the background through launcher (returns after fir
 jobs:      ## launch each stream job as its OWN process via the launcher (PID file + log, RUNNING-state readiness)
 	@mkdir -p .logs
 	@: > .logs/anomaly-job.log
-	streams/gradlew -p streams :anomaly-job:installDist -q
+	@: > .logs/rollup-job.log
+	streams/gradlew -p streams :anomaly-job:installDist :rollup-job:installDist -q
 	# Launch the installed app image directly (not `gradlew run`): the recorded PID is then the real
 	# Streams JVM, so `make stop-apps` SIGTERM triggers its shutdown hook (streams.close(), leaving the
 	# consumer group) and reliably terminates it — `gradlew run` instead forks the JVM as a Gradle
 	# daemon child that the recorded wrapper PID does not own, leaving the descendant alive on stop.
 	scripts/run.sh anomaly-job 'grep -q "State transition.*to RUNNING" .logs/anomaly-job.log' -- streams/anomaly-job/build/install/anomaly-job/bin/anomaly-job
+	scripts/run.sh rollup-job 'grep -q "State transition.*to RUNNING" .logs/rollup-job.log' -- streams/rollup-job/build/install/rollup-job/bin/rollup-job
 
 stop-apps: ## kill every PID in .run/, remove the PID files; safe when nothing runs
 	@if [ -d .run ]; then \
