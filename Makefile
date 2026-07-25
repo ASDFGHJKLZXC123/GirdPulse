@@ -1,4 +1,4 @@
-.PHONY: up down topics schemas jobs projector stop-apps sim demo-corrupt replay replay-demo verify-crash-recovery e2e-clean
+.PHONY: up down topics schemas jobs projector api stop-apps sim demo-corrupt replay replay-demo verify-crash-recovery e2e-clean
 
 REPLAY_ARGS ?= --from-beginning
 DEMO_CORRUPT_ARGS ?=
@@ -38,6 +38,11 @@ projector: ## launch the TypeScript projector after migrations and consumer grou
 	@mkdir -p .logs
 	@: > .logs/projector.log
 	scripts/run.sh projector 'grep -q "projector migrations applied" .logs/projector.log && grep -q "projector consumer joined" .logs/projector.log' -- node --import "$(CURDIR)/projector/node_modules/tsx/dist/loader.mjs" "$(CURDIR)/projector/src/index.ts"
+
+api: ## launch GraphQL queries and subscriptions on the same /graphql path
+	@mkdir -p .logs
+	@: > .logs/api.log
+	scripts/run.sh api 'curl -fsS -H "Apollo-Require-Preflight: true" "http://localhost:$${PORT:-4000}/graphql?query=%7B__typename%7D" >/dev/null' -- node --import "$(CURDIR)/api/node_modules/tsx/dist/loader.mjs" "$(CURDIR)/api/src/index.ts"
 
 demo-corrupt: ## rebuild with the deliberate coordinate swap enabled
 	scripts/demo-corrupt.sh $(DEMO_CORRUPT_ARGS)

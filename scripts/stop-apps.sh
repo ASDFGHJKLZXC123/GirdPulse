@@ -22,6 +22,9 @@ command_matches() {
     projector)
       [[ "$command" == *"$repo_root/projector/src/index.ts"* ]]
       ;;
+    api)
+      [[ "$command" == *"$repo_root/api/src/index.ts"* ]]
+      ;;
     *)
       return 1
       ;;
@@ -34,7 +37,7 @@ stop_recorded_process() {
 
   name="$(basename "$pid_file" .pid)"
   case "$name" in
-    sim | anomaly-job | rollup-job | projector) ;;
+    sim | anomaly-job | rollup-job | projector | api) ;;
     *)
       echo "stop-apps: refusing unknown PID file $pid_file" >&2
       return 1
