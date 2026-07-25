@@ -9,6 +9,22 @@ on:
 jobs:
   ts-lint-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gridpulse
+          POSTGRES_PASSWORD: gridpulse
+          POSTGRES_DB: gridpulse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gridpulse -d gridpulse"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DATABASE_URL: postgresql://gridpulse:gridpulse@localhost:5432/gridpulse
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -20,6 +36,7 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - run: pnpm run lint
+      - run: pnpm --dir projector run typecheck
       - run: pnpm run test
 
   contract-gate:
