@@ -15,9 +15,12 @@ import {
   type ProjectorTopic,
 } from './types.js';
 import {
+  canonicalReplayPartitions,
   isWatermarkSatisfied,
   loadWatermark,
+  nextReplayPartition,
   targetOffset,
+  type ReplayTopicPartition,
   type WatermarkTargets,
 } from './watermark.js';
 
@@ -72,6 +75,35 @@ function createTerminalSignal(): {
   return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
+function seekAuthoritativeOffset(
+  consumer: Consumer,
+  topic: ProjectorTopic,
+  partition: number,
+  offsets: ReadonlyMap<string, string>,
+  earliestOffsets: ReadonlyMap<string, string>,
+): void {
+  const key = offsetKey(topic, partition);
+  const lastOffset = offsets.get(key);
+  if (lastOffset !== undefined) {
+    consumer.seek({
+      topic,
+      partition,
+      offset: (BigInt(lastOffset) + 1n).toString(),
+    });
+    return;
+  }
+
+  const earliestOffset = earliestOffsets.get(key);
+  if (earliestOffset === undefined) {
+    throw new Error(`Missing earliest Kafka offset for ${topic}[${partition}]`);
+  }
+  consumer.seek({
+    topic,
+    partition,
+    offset: earliestOffset,
+  });
+}
+
 function seekStoredOffsets(
   consumer: Consumer,
   offsets: ReadonlyMap<string, string>,
@@ -86,7 +118,6 @@ function seekStoredOffsets(
     }
     for (const partition of partitions) {
       const key = offsetKey(topic, partition);
-      const lastOffset = offsets.get(key);
       const progressOffset = progressOffsets.get(key);
       const target = targetOffset(targets, topic, partition);
       if (
@@ -97,23 +128,7 @@ function seekStoredOffsets(
         consumer.pause([{ topic, partitions: [partition] }]);
         continue;
       }
-      if (lastOffset === undefined) {
-        const earliestOffset = earliestOffsets.get(key);
-        if (earliestOffset === undefined) {
-          throw new Error(`Missing earliest Kafka offset for ${topic}[${partition}]`);
-        }
-        consumer.seek({
-          topic,
-          partition,
-          offset: earliestOffset,
-        });
-        continue;
-      }
-      consumer.seek({
-        topic,
-        partition,
-        offset: (BigInt(lastOffset) + 1n).toString(),
-      });
+      seekAuthoritativeOffset(consumer, topic, partition, offsets, earliestOffsets);
     }
   }
 }
@@ -176,6 +191,8 @@ export async function runProjector(config: ProjectorConfig): Promise<void> {
     const persistedOffsets = await loadProjectorOffsets(pool);
     const targets = config.watermarkFile ? await loadWatermark(config.watermarkFile) : undefined;
     const watermarkProgress = new Map(persistedOffsets);
+    let replayPartitions: ReplayTopicPartition[] = [];
+    let activeReplayPartition: ReplayTopicPartition | undefined;
     const registry = new SchemaRegistry({
       host: normalizeRegistryUrl(config.schemaRegistryUrl),
     });
@@ -199,6 +216,50 @@ export async function runProjector(config: ProjectorConfig): Promise<void> {
       terminal.resolve('watermark');
     };
 
+    const syncReplayPartition = (force = false): void => {
+      if (!targets || !consumer) {
+        return;
+      }
+
+      // A bounded replay needs a global order: duplicate event IDs can exist in different
+      // partitions, and ON CONFLICT DO NOTHING must select the same first record every run.
+      const next = nextReplayPartition(replayPartitions, targets, watermarkProgress);
+      const activeKey = activeReplayPartition
+        ? offsetKey(activeReplayPartition.topic, activeReplayPartition.partition)
+        : undefined;
+      const nextKey = next ? offsetKey(next.topic, next.partition) : undefined;
+
+      if (force || activeKey !== nextKey) {
+        for (const topicPartition of replayPartitions) {
+          const selection = [
+            {
+              topic: topicPartition.topic,
+              partitions: [topicPartition.partition],
+            },
+          ];
+          consumer.pause(selection);
+        }
+        if (next) {
+          seekAuthoritativeOffset(
+            consumer,
+            next.topic,
+            next.partition,
+            persistedOffsets,
+            earliestOffsets,
+          );
+          consumer.resume([{ topic: next.topic, partitions: [next.partition] }]);
+        }
+        activeReplayPartition = next;
+        if (next) {
+          console.log(
+            `projector replay partition active topic=${next.topic} partition=${next.partition}`,
+          );
+        }
+      }
+
+      completeWatermark();
+    };
+
     consumer.on(consumer.events.GROUP_JOIN, (event) => {
       seekStoredOffsets(
         consumer!,
@@ -208,8 +269,14 @@ export async function runProjector(config: ProjectorConfig): Promise<void> {
         event.payload.memberAssignment,
         targets,
       );
+      replayPartitions = targets ? canonicalReplayPartitions(event.payload.memberAssignment) : [];
+      activeReplayPartition = undefined;
       console.log('projector consumer joined');
-      completeWatermark();
+      if (targets) {
+        syncReplayPartition(true);
+      } else {
+        completeWatermark();
+      }
     });
     consumer.on(consumer.events.END_BATCH_PROCESS, (event) => {
       if (event.payload.batchSize !== 0 || !isProjectorTopic(event.payload.topic)) {
@@ -217,6 +284,14 @@ export async function runProjector(config: ProjectorConfig): Promise<void> {
       }
 
       const topic = event.payload.topic;
+      if (
+        targets &&
+        (!activeReplayPartition ||
+          activeReplayPartition.topic !== topic ||
+          activeReplayPartition.partition !== event.payload.partition)
+      ) {
+        return;
+      }
       const key = offsetKey(topic, event.payload.partition);
       advanceOffset(watermarkProgress, key, event.payload.lastOffset);
 
@@ -224,7 +299,11 @@ export async function runProjector(config: ProjectorConfig): Promise<void> {
       if (target !== undefined && BigInt(event.payload.lastOffset) >= BigInt(target)) {
         consumer!.pause([{ topic, partitions: [event.payload.partition] }]);
       }
-      completeWatermark();
+      if (targets) {
+        syncReplayPartition();
+      } else {
+        completeWatermark();
+      }
     });
     consumer.on(consumer.events.CRASH, (event) => {
       terminal.reject(event.payload.error);
@@ -253,6 +332,14 @@ export async function runProjector(config: ProjectorConfig): Promise<void> {
         }
 
         const topic = batch.topic;
+        if (
+          targets &&
+          (!activeReplayPartition ||
+            activeReplayPartition.topic !== topic ||
+            activeReplayPartition.partition !== batch.partition)
+        ) {
+          return;
+        }
         await heartbeat();
         const messages = boundedMessages(
           topic,
@@ -307,7 +394,11 @@ export async function runProjector(config: ProjectorConfig): Promise<void> {
         }
 
         await heartbeat();
-        completeWatermark();
+        if (targets) {
+          syncReplayPartition();
+        } else {
+          completeWatermark();
+        }
       },
     });
 

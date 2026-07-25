@@ -11,6 +11,11 @@ export interface WatermarkFile {
 
 export type WatermarkTargets = Map<string, string>;
 
+export interface ReplayTopicPartition {
+  topic: ProjectorTopic;
+  partition: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -108,6 +113,48 @@ export function targetOffset(
   partition: number,
 ): string | undefined {
   return targets?.get(offsetKey(topic, partition));
+}
+
+export function canonicalReplayPartitions(
+  assignment: Readonly<Record<string, readonly number[]>>,
+): ReplayTopicPartition[] {
+  const ordered: ReplayTopicPartition[] = [];
+
+  for (const topic of PROJECTOR_TOPICS) {
+    const partitions = [...(assignment[topic] ?? [])].sort((left, right) => left - right);
+    const expected = Array.from(
+      { length: PROJECTOR_PARTITION_COUNTS[topic] },
+      (_, partition) => partition,
+    );
+    if (
+      partitions.length !== expected.length ||
+      partitions.some((partition, index) => partition !== expected[index])
+    ) {
+      throw new Error(
+        `Fixed-watermark replay requires exclusive assignment of ${topic}[${expected.join(',')}]; got [${partitions.join(',')}]`,
+      );
+    }
+    for (const partition of partitions) {
+      ordered.push({ topic, partition });
+    }
+  }
+
+  return ordered;
+}
+
+export function nextReplayPartition(
+  partitions: readonly ReplayTopicPartition[],
+  targets: WatermarkTargets,
+  progress: ReadonlyMap<string, string>,
+): ReplayTopicPartition | undefined {
+  return partitions.find(({ topic, partition }) => {
+    const target = targetOffset(targets, topic, partition);
+    if (target === undefined || BigInt(target) < 0n) {
+      return false;
+    }
+    const current = progress.get(offsetKey(topic, partition));
+    return current === undefined || BigInt(current) < BigInt(target);
+  });
 }
 
 export function isWatermarkSatisfied(
