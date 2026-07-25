@@ -1,4 +1,7 @@
-.PHONY: up down topics schemas jobs stop-apps sim e2e-clean
+.PHONY: up down topics schemas jobs projector stop-apps sim demo-corrupt replay replay-demo verify-crash-recovery e2e-clean
+
+REPLAY_ARGS ?= --from-beginning
+DEMO_CORRUPT_ARGS ?=
 
 up:        ## start infra
 	docker compose up -d --wait
@@ -31,19 +34,38 @@ jobs:      ## launch each stream job as its OWN process via the launcher (PID fi
 	scripts/run.sh anomaly-job 'grep -q "State transition.*to RUNNING" .logs/anomaly-job.log' -- streams/anomaly-job/build/install/anomaly-job/bin/anomaly-job
 	scripts/run.sh rollup-job 'grep -q "State transition.*to RUNNING" .logs/rollup-job.log' -- streams/rollup-job/build/install/rollup-job/bin/rollup-job
 
+projector: ## launch the TypeScript projector after migrations and consumer group join
+	@mkdir -p .logs
+	@: > .logs/projector.log
+	scripts/run.sh projector 'grep -q "projector migrations applied" .logs/projector.log && grep -q "projector consumer joined" .logs/projector.log' -- node --import "$(CURDIR)/projector/node_modules/tsx/dist/loader.mjs" "$(CURDIR)/projector/src/index.ts"
+
+demo-corrupt: ## rebuild with the deliberate coordinate swap enabled
+	scripts/demo-corrupt.sh $(DEMO_CORRUPT_ARGS)
+
+replay: ## rebuild cleanly; override with REPLAY_ARGS="--since <ISO> [--to-watermark <file>]"
+	scripts/replay.sh $(REPLAY_ARGS)
+
+replay-demo: ## fixed-prefix control -> corrupt -> clean replay with exact checksum proof
+	@set -eu; \
+		mkdir -p .run; \
+		watermark="$(CURDIR)/.run/watermark.json"; \
+		control="$(CURDIR)/.run/control-checksum.json"; \
+		corrupt="$(CURDIR)/.run/corrupt-checksum.json"; \
+		final="$(CURDIR)/.run/final-checksum.json"; \
+		scripts/watermark.sh "$$watermark"; \
+		scripts/replay.sh --from-beginning --to-watermark "$$watermark"; \
+		pnpm --dir projector exec tsx src/tools/checksum.ts --write "$$control"; \
+		scripts/demo-corrupt.sh --to-watermark "$$watermark"; \
+		pnpm --dir projector exec tsx src/tools/checksum.ts --write "$$corrupt" --expect-different "$$control"; \
+		scripts/replay.sh --from-beginning --to-watermark "$$watermark"; \
+		pnpm --dir projector exec tsx src/tools/checksum.ts --write "$$final" --expect "$$control"; \
+		echo "replay-demo: PASS clean replay exactly matches the fixed-watermark control"
+
+verify-crash-recovery: ## kill -9 a partial replay, resume from Postgres offsets, and verify the control checksum
+	scripts/verify-crash-recovery.sh
+
 stop-apps: ## kill every PID in .run/, remove the PID files; safe when nothing runs
-	@if [ -d .run ]; then \
-		for f in .run/*.pid; do \
-			[ -e "$$f" ] || continue; \
-			pid=$$(cat "$$f"); \
-			name=$$(basename "$$f" .pid); \
-			if kill -0 "$$pid" 2>/dev/null; then \
-				echo "stopping $$name (pid $$pid)"; \
-				kill "$$pid" 2>/dev/null || true; \
-			fi; \
-			rm -f "$$f"; \
-		done; \
-	fi
+	scripts/stop-apps.sh
 
 e2e-clean: stop-apps ## guarantees no stale Kafka/Postgres state
 	docker compose down -v

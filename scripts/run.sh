@@ -32,16 +32,38 @@ mkdir -p "$run_dir" "$log_dir"
 
 if [ -f "$pid_file" ]; then
   existing_pid="$(cat "$pid_file")"
-  if kill -0 "$existing_pid" 2>/dev/null; then
+  if ! [[ "$existing_pid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "run.sh: removing invalid PID file for '$name' ($pid_file)" >&2
+    rm -f "$pid_file"
+  elif kill -0 "$existing_pid" 2>/dev/null; then
     echo "run.sh: '$name' already running (pid $existing_pid, $pid_file)" >&2
     exit 1
+  else
+    rm -f "$pid_file"
   fi
-  rm -f "$pid_file"
 fi
 
 "$@" >"$log_file" 2>&1 &
 pid=$!
 echo "$pid" >"$pid_file"
+
+terminate_child() {
+  local attempt
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    for attempt in $(seq 1 20); do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.25
+    done
+  fi
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+  rm -f "$pid_file"
+}
 
 timeout=60
 elapsed=0
@@ -53,6 +75,7 @@ until eval "$probe" >/dev/null 2>&1; do
   fi
   if [ "$elapsed" -ge "$timeout" ]; then
     echo "run.sh: '$name' (pid $pid) did not become ready within ${timeout}s" >&2
+    terminate_child
     exit 1
   fi
   sleep 1
