@@ -77,7 +77,7 @@ class AnomalyTopologyTest {
         try (Harness h = new Harness("b")) {
             long spikeTs = BASE + 2 * MIN;
             h.pipe(VEHICLE, 150.0, spikeTs);
-            h.flush(VEHICLE, FLUSH_TS); // final > 120 event, same key, far future
+            h.flush(VEHICLE, FLUSH_TS); // final normal event, same key, far future
 
             List<Anomaly> anomalies = h.anomaliesFor(VEHICLE);
 
