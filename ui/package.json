@@ -4,6 +4,29 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "echo \"no tests yet\" && exit 0"
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite --host 0.0.0.0 --port 5173 --strictPort",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@apollo/client": "3.13.9",
+    "graphql": "16.11.0",
+    "graphql-ws": "6.2.0",
+    "maplibre-gl": "6.0.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.4",
+    "jsdom": "30.0.1",
+    "typescript": "5.9.3",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
   }
 }

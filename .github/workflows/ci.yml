@@ -48,6 +48,8 @@ jobs:
       - run: pnpm run lint
       - run: pnpm --dir projector run typecheck
       - run: pnpm --dir api run typecheck
+      - run: pnpm --dir ui run typecheck
+      - run: pnpm --dir ui run build
       - run: pnpm --dir scripts run schemas
       - run: pnpm run test
 

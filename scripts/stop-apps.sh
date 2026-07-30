@@ -25,6 +25,9 @@ command_matches() {
     api)
       [[ "$command" == *"$repo_root/api/src/index.ts"* ]]
       ;;
+    ui)
+      [[ "$command" == *"$repo_root/ui/node_modules/vite/bin/vite.js"* ]]
+      ;;
     *)
       return 1
       ;;
@@ -37,7 +40,7 @@ stop_recorded_process() {
 
   name="$(basename "$pid_file" .pid)"
   case "$name" in
-    sim | anomaly-job | rollup-job | projector | api) ;;
+    sim | anomaly-job | rollup-job | projector | api | ui) ;;
     *)
       echo "stop-apps: refusing unknown PID file $pid_file" >&2
       return 1

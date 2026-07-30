@@ -1,4 +1,4 @@
-.PHONY: up down topics schemas jobs projector api stop-apps sim demo-corrupt replay replay-demo verify-crash-recovery e2e-clean
+.PHONY: up down topics schemas jobs projector api ui stop-apps sim demo-corrupt replay replay-demo verify-crash-recovery e2e-clean
 
 REPLAY_ARGS ?= --from-beginning
 DEMO_CORRUPT_ARGS ?=
@@ -43,6 +43,11 @@ api: ## launch GraphQL queries and subscriptions on the same /graphql path
 	@mkdir -p .logs
 	@: > .logs/api.log
 	scripts/run.sh api 'curl -fsS -H "Apollo-Require-Preflight: true" "http://localhost:$${PORT:-4000}/graphql?query=%7B__typename%7D" >/dev/null' -- node --import "$(CURDIR)/api/node_modules/tsx/dist/loader.mjs" "$(CURDIR)/api/src/index.ts"
+
+ui: ## launch the Vite UI development server on :5173
+	@mkdir -p .logs
+	@: > .logs/ui.log
+	scripts/run.sh ui 'curl -fsS "http://localhost:$${UI_PORT:-5173}" >/dev/null' -- node "$(CURDIR)/ui/node_modules/vite/bin/vite.js" "$(CURDIR)/ui" --host 0.0.0.0 --port "$${UI_PORT:-5173}" --strictPort
 
 demo-corrupt: ## rebuild with the deliberate coordinate swap enabled
 	scripts/demo-corrupt.sh $(DEMO_CORRUPT_ARGS)
