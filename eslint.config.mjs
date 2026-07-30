@@ -16,5 +16,13 @@ export default tseslint.config(
       },
     },
   },
+  {
+    files: ['ui/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+      },
+    },
+  },
   eslintConfigPrettier,
 );
