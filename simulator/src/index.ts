@@ -1,10 +1,9 @@
 import { Kafka, Partitioners } from 'kafkajs';
 import { SchemaRegistry } from '@kafkajs/confluent-schema-registry';
-import { SimulatorEngine, loadConfig } from './simulator-core';
+import { SimulatorEngine, loadConfig, resolvePinnedSchemaId } from './simulator-core';
 
 const LOG_PREFIX = 'simulator';
 const TOPIC = 'fleet.vehicle-events';
-const SUBJECT = 'fleet.vehicle-events-value';
 const READINESS_LOG = 'ready: first event produced';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,7 +30,7 @@ async function run(): Promise<void> {
 
   const engine = new SimulatorEngine(config);
   const registry = new SchemaRegistry({ host: normalizeSchemaRegistryHost(config.schemaRegistryUrl) });
-  const schemaId = await registry.getLatestSchemaId(SUBJECT);
+  const schemaId = await resolvePinnedSchemaId(registry, (message) => console.log(`${LOG_PREFIX} ${message}`));
   const kafka = new Kafka({
     clientId: 'gridpulse-simulator',
     brokers: config.brokers,

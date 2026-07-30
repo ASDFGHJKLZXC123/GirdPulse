@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   loadConfig,
+  nextBatteryPct,
   REGION_CODES,
+  resolvePinnedSchemaId,
   SimulatorEngine,
+  VEHICLE_EVENTS_SCHEMA_VERSION,
+  VEHICLE_EVENTS_SUBJECT,
 } from './simulator-core';
 import type { VehicleEvent } from './simulator-core';
 
@@ -62,6 +67,8 @@ class SequenceRng {
     this.index += 1;
     return value === undefined ? 0.5 : value;
   };
+
+  callCount = () => this.index;
 }
 
 type RngPlanByTick = Map<number, number[]>;
@@ -130,7 +137,8 @@ describe('fleet model', () => {
   });
 
   it('applies transition before movement and emits zero speed on ACTIVE->IDLE transition', () => {
-    const rng = new SequenceRng([0.5, 0.5, 0.5, 0.5, 0.01]);
+    // Five spawn draws (lat, lon, speed, heading, battery) then the transition roll.
+    const rng = new SequenceRng([0.5, 0.5, 0.5, 0.5, 0.5, 0.01]);
     const config = configWith({ vehicles: 1, seed: 'order' });
     const engine = new SimulatorEngine(config, rng.next);
     const { events } = engine.tick(1_000);
@@ -211,7 +219,7 @@ describe('probabilities and determinism', () => {
     const run = (cfg: typeof configA): string[] =>
       collectTrackedEvents(cfg, 500).map((entry) => {
         const e = entry.event;
-        return `${e.vehicle_id},${e.lat.toFixed(8)},${e.lon.toFixed(8)},${e.speed_kph.toFixed(5)}`;
+        return `${e.vehicle_id},${e.lat.toFixed(8)},${e.lon.toFixed(8)},${e.speed_kph.toFixed(5)},${e.battery_pct.toFixed(5)}`;
       });
 
     expect(run(configA)).toEqual(run(configB));
@@ -405,6 +413,37 @@ describe('injection semantics', () => {
     expect(rate).toBeLessThan(0.012);
   });
 
+  it('duplicate copies the event verbatim including battery and does not advance battery twice', () => {
+    const config = configWith({
+      seed: 'dupes-battery',
+      vehicles: 1,
+      inject: new Set(['dupes']),
+      tickMs: 1000,
+    });
+    const engine = new SimulatorEngine(config);
+
+    let duplicated: VehicleEvent[] | null = null;
+    let batteryBefore = Number.NaN;
+    for (let tick = 0; tick < 5_000 && duplicated === null; tick++) {
+      const before = engine.vehicles[0].batteryPct;
+      const events = engine.tick(1_000 + tick * config.tickMs).events;
+      if (events.length > 1) {
+        duplicated = events;
+        batteryBefore = before;
+      }
+    }
+
+    expect(duplicated).not.toBeNull();
+    const [original, copy] = duplicated!;
+    expect(duplicated).toHaveLength(2);
+    expect(copy).toEqual(original);
+    expect(JSON.stringify(copy)).toBe(JSON.stringify(original));
+    expect(copy.battery_pct).toBe(original.battery_pct);
+    // One update for the tick, not one per emitted event.
+    expect(original.battery_pct).toBeCloseTo(nextBatteryPct(batteryBefore, original.status), 10);
+    expect(engine.vehicles[0].batteryPct).toBe(original.battery_pct);
+  });
+
   it('no flags means clean baseline: no late/dupe/spike/teleport artifacts', () => {
     const config = configWith({
       seed: 'clean',
@@ -421,5 +460,183 @@ describe('injection semantics', () => {
     for (const event of events) {
       expect(event.speed_kph).toBeLessThanOrEqual(80);
     }
+  });
+});
+
+describe('battery state of charge', () => {
+  it('spawns every battery uniformly across 60-100 and deterministically per seed', () => {
+    const config = configWith({ seed: 'battery-spawn', vehicles: 400 });
+    const batteries = new SimulatorEngine(config).vehicles.map((vehicle) => vehicle.batteryPct);
+
+    for (const battery of batteries) {
+      expect(Number.isFinite(battery)).toBe(true);
+      expect(battery).toBeGreaterThanOrEqual(60);
+      expect(battery).toBeLessThanOrEqual(100);
+    }
+
+    const mean = batteries.reduce((acc, value) => acc + value, 0) / batteries.length;
+    expect(mean).toBeGreaterThan(78);
+    expect(mean).toBeLessThan(82);
+    expect(Math.min(...batteries)).toBeLessThan(64);
+    expect(Math.max(...batteries)).toBeGreaterThan(96);
+    expect(new Set(batteries).size).toBeGreaterThan(300);
+
+    const same = new SimulatorEngine(configWith({ seed: 'battery-spawn', vehicles: 400 })).vehicles.map(
+      (vehicle) => vehicle.batteryPct,
+    );
+    const different = new SimulatorEngine(configWith({ seed: 'battery-spawn-other', vehicles: 400 })).vehicles.map(
+      (vehicle) => vehicle.batteryPct,
+    );
+    expect(same).toEqual(batteries);
+    expect(different).not.toEqual(batteries);
+  });
+
+  it('draws battery as the fifth spawn value from the injected RNG and never per tick', () => {
+    const rng = new SequenceRng([0.1, 0.2, 0.3, 0.4, 0.25]);
+    const config = configWith({ vehicles: 1, seed: 'battery-draw-order' });
+    const engine = new SimulatorEngine(config, rng.next);
+    // 60 + (100 - 60) * 0.25 proves the fifth draw feeds battery, not heading or speed.
+    expect(engine.vehicles[0].batteryPct).toBe(70);
+    expect(engine.vehicles[0].headingDeg).toBeCloseTo(144, 10);
+
+    const drawsBeforeTick = rng.callCount();
+    engine.tick(1_000);
+    const tickDraws = rng.callCount() - drawsBeforeTick;
+    // 1 transition roll + heading drift + speed delta + 31 uuid draws; none for battery.
+    expect(tickDraws).toBe(34);
+  });
+
+  it('applies the per-tick rule for ACTIVE, IDLE, OFFLINE and clamps at both ends', () => {
+    expect(nextBatteryPct(80, 'ACTIVE')).toBeCloseTo(79.95, 10);
+    expect(nextBatteryPct(80, 'IDLE')).toBeCloseTo(80.2, 10);
+    expect(nextBatteryPct(80, 'OFFLINE')).toBe(80);
+    expect(nextBatteryPct(0.02, 'ACTIVE')).toBe(0);
+    expect(nextBatteryPct(0, 'ACTIVE')).toBe(0);
+    expect(nextBatteryPct(99.9, 'IDLE')).toBe(100);
+    expect(nextBatteryPct(100, 'IDLE')).toBe(100);
+    expect(nextBatteryPct(0, 'OFFLINE')).toBe(0);
+    expect(nextBatteryPct(100, 'OFFLINE')).toBe(100);
+    // OFFLINE is clamped like every other status instead of echoing its input back.
+    expect(nextBatteryPct(101, 'OFFLINE')).toBe(100);
+    expect(nextBatteryPct(-1, 'OFFLINE')).toBe(0);
+  });
+
+  it('drains while ACTIVE, charges on ACTIVE->IDLE, freezes on ACTIVE->OFFLINE', () => {
+    // Five spawn draws put battery at 80, then the sixth draw is the transition roll.
+    const stayActive = new SimulatorEngine(
+      configWith({ vehicles: 1, seed: 'battery-active' }),
+      new SequenceRng([0, 0, 0, 0, 0.5, 0.5]).next,
+    );
+    const [activeEvent] = stayActive.tick(1_000).events;
+    expect(activeEvent.status).toBe('ACTIVE');
+    expect(activeEvent.battery_pct).toBeCloseTo(79.95, 10);
+
+    const toIdle = new SimulatorEngine(
+      configWith({ vehicles: 1, seed: 'battery-idle' }),
+      new SequenceRng([0, 0, 0, 0, 0.5, 0.01]).next,
+    );
+    const [idleEvent] = toIdle.tick(1_000).events;
+    expect(idleEvent.status).toBe('IDLE');
+    // Charges on the final emitted status, not the ACTIVE status the tick started in.
+    expect(idleEvent.battery_pct).toBeCloseTo(80.2, 10);
+
+    const toOffline = new SimulatorEngine(
+      configWith({ vehicles: 1, seed: 'battery-offline' }),
+      new SequenceRng([0, 0, 0, 0, 0.5, 0.022]).next,
+    );
+    const [offlineEvent] = toOffline.tick(1_000).events;
+    expect(offlineEvent.status).toBe('OFFLINE');
+    expect(offlineEvent.battery_pct).toBe(80);
+  });
+
+  it('drains a spike-forced ACTIVE vehicle even when it entered the tick IDLE', () => {
+    const config = configWith({
+      seed: 'battery-spike',
+      vehicles: 1,
+      inject: new Set(['spikes']),
+      tickMs: 1000,
+    });
+    const engine = new SimulatorEngine(config);
+    for (let tick = 0; tick < 60; tick++) {
+      engine.vehicles[0].status = 'ACTIVE';
+      engine.tick(1_000 + tick * config.tickMs);
+    }
+    engine.vehicles[0].status = 'ACTIVE';
+    engine.tick(1_000 + 60 * config.tickMs);
+    expect(engine.getSpikesForTest().state).not.toBeNull();
+
+    engine.vehicles[0].status = 'IDLE';
+    const before = engine.vehicles[0].batteryPct;
+    const [spiked] = engine.tick(1_000 + 61 * config.tickMs).events;
+    expect(spiked.status).toBe('ACTIVE');
+    expect(spiked.speed_kph).toBeGreaterThanOrEqual(150);
+    expect(spiked.battery_pct).toBeCloseTo(before - 0.05, 10);
+  });
+
+  it('emits numeric non-null battery_pct in the exact v2 schema field set and order', () => {
+    const schema = JSON.parse(
+      readFileSync(new URL('../../schemas/vehicle-event.v2.avsc', import.meta.url), 'utf-8'),
+    ) as { fields: Array<{ name: string }> };
+    const schemaFields = schema.fields.map((field) => field.name);
+    expect(schemaFields).toContain('battery_pct');
+
+    const config = configWith({ seed: 'battery-shape', vehicles: 6, tickMs: 1000 });
+    const events = collectTrackedEvents(config, 120).map((entry) => entry.event);
+
+    for (const event of events) {
+      expect(Object.keys(event)).toEqual(schemaFields);
+      expect(event.battery_pct).not.toBeNull();
+      expect(typeof event.battery_pct).toBe('number');
+      expect(Number.isFinite(event.battery_pct)).toBe(true);
+      expect(event.battery_pct).toBeGreaterThanOrEqual(0);
+      expect(event.battery_pct).toBeLessThanOrEqual(100);
+    }
+  });
+});
+
+describe('pinned schema resolution', () => {
+  it('resolves exactly subject/version 2 once without latest or registration', async () => {
+    const pinnedCalls: Array<[string, number]> = [];
+    let latestCalls = 0;
+    let registerCalls = 0;
+    const registry = {
+      getRegistryId: async (subject: string, version: number) => {
+        pinnedCalls.push([subject, version]);
+        return 17;
+      },
+      getLatestSchemaId: async () => {
+        latestCalls += 1;
+        return 4;
+      },
+      register: async () => {
+        registerCalls += 1;
+        return { id: 4 };
+      },
+    };
+    const logs: string[] = [];
+
+    const schemaId = await resolvePinnedSchemaId(registry, (message) => logs.push(message));
+
+    expect(schemaId).toBe(17);
+    expect(VEHICLE_EVENTS_SUBJECT).toBe('fleet.vehicle-events-value');
+    expect(VEHICLE_EVENTS_SCHEMA_VERSION).toBe(2);
+    expect(pinnedCalls).toEqual([['fleet.vehicle-events-value', 2]]);
+    expect(latestCalls).toBe(0);
+    expect(registerCalls).toBe(0);
+    expect(logs.join('\n')).toContain('subject=fleet.vehicle-events-value version=2 schemaId=17');
+  });
+
+  it('fails clearly when version 2 is missing and points at make schemas', async () => {
+    const registry = {
+      getRegistryId: async (subject: string, version: number): Promise<number> => {
+        throw new Error(`Version ${version} of subject ${subject} not found`);
+      },
+    };
+    const logs: string[] = [];
+
+    await expect(resolvePinnedSchemaId(registry, (message) => logs.push(message))).rejects.toThrow(
+      /fleet\.vehicle-events-value version 2.*make schemas.*no auto-registration/s,
+    );
+    expect(logs).toHaveLength(0);
   });
 });
