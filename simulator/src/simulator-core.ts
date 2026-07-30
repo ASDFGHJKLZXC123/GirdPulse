@@ -32,6 +32,7 @@ export interface VehicleState {
   lon: number;
   speedKph: number;
   headingDeg: number;
+  batteryPct: number;
   status: VehicleStatus;
 }
 
@@ -43,6 +44,7 @@ export interface VehicleEvent {
   lon: number;
   speed_kph: number;
   heading_deg: number;
+  battery_pct: number;
   status: VehicleStatus;
   occurred_at: number;
 }
@@ -83,6 +85,17 @@ const TRANSITION_OFFLINE_TO_ACTIVE = 0.05;
 
 const MIN_LATE_MS = 2 * 60 * 1000;
 const MAX_LATE_MS = 10 * 60 * 1000;
+
+const BATTERY_SPAWN_MIN_PCT = 60;
+const BATTERY_SPAWN_MAX_PCT = 100;
+const BATTERY_MIN_PCT = 0;
+const BATTERY_MAX_PCT = 100;
+// Per engine tick, deliberately not scaled by tickMs.
+const BATTERY_ACTIVE_DELTA_PCT = -0.05;
+const BATTERY_IDLE_DELTA_PCT = 0.2;
+
+export const VEHICLE_EVENTS_SUBJECT = 'fleet.vehicle-events-value';
+export const VEHICLE_EVENTS_SCHEMA_VERSION = 2;
 
 function parseNumber(value: string | undefined, fallback: number, key: string): number {
   if (value === undefined || value === '') {
@@ -276,9 +289,55 @@ export function buildInitialVehicles(config: SimulatorConfig, rng: () => number)
       lon: randomUniform(rng, region.lonMin, region.lonMax),
       speedKph: randomUniform(rng, SPEED_MIN, SPEED_MAX),
       headingDeg: randomUniform(rng, 0, 360),
+      // Fifth spawn draw, immediately after heading, from the injected/seeded RNG.
+      batteryPct: randomUniform(rng, BATTERY_SPAWN_MIN_PCT, BATTERY_SPAWN_MAX_PCT),
       status: 'ACTIVE',
     };
   });
+}
+
+/**
+ * Observational state-of-charge rule: it consumes no RNG, is not scaled by tickMs,
+ * and never influences status. OFFLINE vehicles neither drain nor charge.
+ */
+export function nextBatteryPct(current: number, status: VehicleStatus): number {
+  // OFFLINE is a zero delta rather than an early return, so every status shares the
+  // same clamp and no caller can observe an out-of-range percentage.
+  const delta =
+    status === 'OFFLINE'
+      ? 0
+      : status === 'ACTIVE'
+        ? BATTERY_ACTIVE_DELTA_PCT
+        : BATTERY_IDLE_DELTA_PCT;
+  return clamp(current + delta, BATTERY_MIN_PCT, BATTERY_MAX_PCT);
+}
+
+export interface SchemaIdResolver {
+  getRegistryId(subject: string, version: number): Promise<number>;
+}
+
+/**
+ * Resolves the pinned Registry schema ID for the producer. The subject/version pair is
+ * pinned so no `latest` lookup, no hardcoded global ID, and no registration ever happens
+ * here; registration stays with `make schemas`.
+ */
+export async function resolvePinnedSchemaId(
+  registry: SchemaIdResolver,
+  log: (message: string) => void = console.log,
+): Promise<number> {
+  let schemaId: number;
+  try {
+    schemaId = await registry.getRegistryId(VEHICLE_EVENTS_SUBJECT, VEHICLE_EVENTS_SCHEMA_VERSION);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `cannot resolve subject ${VEHICLE_EVENTS_SUBJECT} version ${VEHICLE_EVENTS_SCHEMA_VERSION}: ${reason}. ` +
+        'Register it first with `make schemas`; the simulator performs no auto-registration.',
+      { cause: error },
+    );
+  }
+  log(`schema subject=${VEHICLE_EVENTS_SUBJECT} version=${VEHICLE_EVENTS_SCHEMA_VERSION} schemaId=${schemaId}`);
+  return schemaId;
 }
 
 function applyTransition(state: VehicleState, rng: () => number): boolean {
@@ -417,6 +476,10 @@ export class SimulatorEngine {
         vehicle.speedKph = movement.speedKph;
       }
 
+      // Exactly one battery update per tick, driven by the final emitted status
+      // (after ordinary transitions and after any spike-forced ACTIVE).
+      vehicle.batteryPct = nextBatteryPct(vehicle.batteryPct, vehicle.status);
+
       if (this.shouldInject('teleport') && this.rng() < INJECT_TELEPORT_PCT) {
         vehicle.lat = randomUniform(this.rng, vehicle.region.latMin, vehicle.region.latMax);
         vehicle.lon = randomUniform(this.rng, vehicle.region.lonMin, vehicle.region.lonMax);
@@ -436,6 +499,7 @@ export class SimulatorEngine {
         lon: vehicle.lon,
         speed_kph: clamp(vehicle.speedKph, 0, 500),
         heading_deg: vehicle.headingDeg,
+        battery_pct: vehicle.batteryPct,
         status: vehicle.status,
         occurred_at: Math.trunc(occurredAt),
       };
