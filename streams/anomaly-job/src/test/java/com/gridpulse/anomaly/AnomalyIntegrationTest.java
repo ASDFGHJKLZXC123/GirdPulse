@@ -1,5 +1,6 @@
 package com.gridpulse.anomaly;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -57,10 +58,11 @@ import org.testcontainers.utility.DockerImageName;
  * absent from the canonical schema. Remove that config and this test fails with registry 40403, the
  * exact production failure class.
  *
- * <p>Produces a 3-spike burst plus a same-key above-threshold final clock control past the latest
- * asserted containing hopping window's end + grace, then asserts ≥ 1 decoded {@link Anomaly} on
- * {@code fleet.anomalies} with no duplicate {@code (vehicle_id, window_start)} pairs. The control's own
- * far-future window never closes, so no control-only window is emitted or asserted.
+ * <p>Produces a 3-spike burst followed only by a same-key normal-speed event 81 event-time seconds
+ * after the first spike. That ordinary event crosses the earliest containing window's close plus
+ * grace, proving the first decoded {@link Anomaly} arrives within two event-time minutes without a
+ * later threshold violation. It also asserts the spike-only maximum and no duplicate
+ * {@code (vehicle_id, window_start)} pairs.
  */
 @Testcontainers
 class AnomalyIntegrationTest {
@@ -73,7 +75,9 @@ class AnomalyIntegrationTest {
     private static final long MIN = 60_000L;
     private static final long SEC = 1_000L;
     private static final long BASE = 1000 * MIN;
-    private static final long FLUSH_TS = BASE + 60 * MIN;
+    private static final long FIRST_SPIKE_TS = BASE + 10 * SEC;
+    private static final long NORMAL_CLOCK_TS = BASE + 91 * SEC;
+    private static final long EXPECTED_WINDOW_START = BASE - 4 * MIN;
     private static final String VEHICLE = "v-int";
 
     @Test
@@ -93,10 +97,16 @@ class AnomalyIntegrationTest {
             final List<Anomaly> anomalies = consumeAnomalies(bootstrap, registry);
 
             assertFalse(anomalies.isEmpty(), "expected at least one anomaly on fleet.anomalies");
+            assertEquals(1, anomalies.size(), "only the earliest containing window is closed");
+            assertTrue(
+                    NORMAL_CLOCK_TS - FIRST_SPIKE_TS < 2 * MIN,
+                    "normal traffic closes the first spike window within two event-time minutes");
 
             final Set<String> seen = new HashSet<>();
             for (Anomaly a : anomalies) {
-                assertTrue(a.getValue() > 120.0, "anomaly value must exceed the threshold");
+                assertEquals(160.0, a.getValue(), 1e-9, "normal clock cannot change spike maxSpeed");
+                assertEquals("west", a.getRegion(), "normal clock cannot change the violation region");
+                assertEquals(EXPECTED_WINDOW_START, a.getWindowStart().toEpochMilli());
                 assertTrue(a.getKind() == AnomalyKind.SPEED_THRESHOLD, "kind is SPEED_THRESHOLD");
                 final String pair = a.getVehicleId() + "|" + a.getWindowStart().toEpochMilli();
                 assertTrue(seen.add(pair), "no duplicate (vehicle_id, window_start): " + pair);
@@ -146,15 +156,12 @@ class AnomalyIntegrationTest {
 
         try (KafkaProducer<String, VehicleEvent> producer = new KafkaProducer<>(props)) {
             // Three spikes in one hopping-window burst, same key -> same partition/task.
-            producer.send(record(VEHICLE, 150.0, BASE + 1 * SEC));
-            producer.send(record(VEHICLE, 155.0, BASE + 2 * SEC));
-            producer.send(record(VEHICLE, 160.0, BASE + 3 * SEC));
-            // Final same-key above-threshold clock control, strictly beyond the latest asserted
-            // containing hopping window's end + grace. It routes through the same task/partition to
-            // advance stream time and flush the burst's closed windows; its own far-future window
-            // never closes, so no control-only window is emitted. This control is test mechanics only,
-            // not one of the simulator's five ACTIVE spike events.
-            producer.send(record(VEHICLE, 200.0, FLUSH_TS));
+            producer.send(record(VEHICLE, 150.0, FIRST_SPIKE_TS));
+            producer.send(record(VEHICLE, 155.0, FIRST_SPIKE_TS + SEC));
+            producer.send(record(VEHICLE, 160.0, FIRST_SPIKE_TS + 2 * SEC));
+            // The only later record is ordinary traffic on the same key/task. At BASE+91s it is just
+            // beyond the earliest window's BASE+90s close and only 81s after the first spike.
+            producer.send(record(VEHICLE, 60.0, NORMAL_CLOCK_TS));
             producer.flush();
         }
     }

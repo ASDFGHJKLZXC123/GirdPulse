@@ -28,24 +28,12 @@ import org.junit.jupiter.api.Test;
 /**
  * TopologyTestDriver (unit, no broker) coverage of the anomaly topology.
  *
- * <p><b>Clock-control rule (CCR-006), for this strict-filter-before-hopping-window topology:</b>
- * because {@code filter(speed_kph > 120.0)} precedes the window and {@code suppress(untilWindowCloses)},
- * only above-threshold records reach the windowed aggregate and suppress operators. Two distinct clocks
- * matter: the windowed aggregate's own observed stream time (advanced only by records that PASS the
- * filter, governing window expiry for late records) and the suppress node's stream time (advanced only
- * by records that TRAVERSE suppress, governing flush). A {@code <= 120} event reaches neither, so it
- * can neither expire a window nor flush suppress. Therefore every fixture record that must reach the
- * post-filter window/suppress path is an above-threshold clock control that: (1) is keyed to the same
- * vehicle as the asserted burst (same task/partition), (2) lies outside every asserted target window,
- * and (3) is excluded from assertions for its own later control-only window (which never closes and so
- * never emits). A final suppress-flush control is timestamped strictly beyond the latest asserted
- * containing hopping window's {@code window_end + 30s grace}. Intermediate controls that position stream
- * time for the within-grace / post-grace tests follow the same rules, timestamped on the required side
- * of the asserted window's close. Clock controls are test mechanics, not part of the simulator's
- * five-event ACTIVE spike burst.
- *
- * <p>Test (a) is the sole exception: its suppress buffer is empty (every speed ≤ 120), so it
- * intentionally retains a final non-spike clock event and asserts no output.
+ * <p><b>Clock-control rule (CCR-008):</b> every valid vehicle event reaches the hopping window, while
+ * only {@code speed_kph > 120.0} mutates the violation aggregate. Same-key normal-speed records
+ * therefore advance the same task/partition's stream time and flush closed violation windows without
+ * creating or changing an anomaly. A full-hop-set flush lies beyond the latest containing window's
+ * {@code window_end + 30s grace}; the focused latency fixture advances only beyond the earliest
+ * containing window's close and proves first output in less than two event-time minutes.
  *
  * <p><b>Hopping caveat:</b> a single spike at {@code t} falls into up to 5 overlapping 5-min windows
  * (advance 1 min) ⇒ up to 5 anomalies is correct. Assertions check per-window uniqueness, never a
@@ -75,8 +63,8 @@ class AnomalyTopologyTest {
     void noAnomalyWhenAllSpeedsBelowThreshold() {
         try (Harness h = new Harness("a")) {
             h.pipe(VEHICLE, 90.0, BASE + 10 * SEC);
-            h.pipe(VEHICLE, 120.0, BASE + 20 * SEC); // exactly 120 is NOT > 120 -> filtered
-            // Trailing clock event beyond window_end + grace (filtered; advances stream time only).
+            h.pipe(VEHICLE, 120.0, BASE + 20 * SEC); // exactly 120 does not mutate the aggregate
+            // Normal traffic advances stream time but must not create an anomaly.
             h.pipe(VEHICLE, 0.0, FLUSH_TS);
 
             assertTrue(h.anomaliesFor(VEHICLE).isEmpty(), "no anomaly expected when nothing exceeds threshold");
@@ -122,11 +110,9 @@ class AnomalyTopologyTest {
     void lateEventWithinGraceIsCounted() {
         try (Harness h = new Harness("c")) {
             // Window under test W0 = [BASE, BASE+5min), closes at BASE+5min+30s.
-            // The aggregate's clock only advances on records that PASS the filter (> 120), so the
-            // stream-time "advance" event must itself be > 120 (placed outside W0 so it never counts
-            // toward W0). BASE+320s => aggregate closeTime BASE+290s < W0 end BASE+300s => W0 open.
+            // BASE+320s => aggregate closeTime BASE+290s < W0 end BASE+300s => W0 open.
             h.pipe(VEHICLE, 130.0, BASE + 250 * SEC);          // first violation in W0
-            h.pipe(VEHICLE, 121.0, BASE + 320 * SEC);          // advance to <5min+30s past W0 start (W0 still open)
+            h.pipe(VEHICLE, 60.0, BASE + 320 * SEC);           // normal traffic advances time; W0 still open
             h.pipe(VEHICLE, 150.0, BASE + 260 * SEC);          // late (out-of-order) but within grace -> counted
             h.flush(VEHICLE, FLUSH_TS);
 
@@ -139,10 +125,10 @@ class AnomalyTopologyTest {
     @Test
     void lateEventAfterGraceIsDropped() {
         try (Harness h = new Harness("d")) {
-            // > 120 advance event at BASE+340s (outside W0) => aggregate closeTime BASE+310s >= W0 end
+            // Normal event at BASE+340s => aggregate closeTime BASE+310s >= W0 end
             // BASE+300s => W0 is expired when the late e2 arrives.
             h.pipe(VEHICLE, 130.0, BASE + 250 * SEC);          // first violation in W0
-            h.pipe(VEHICLE, 121.0, BASE + 340 * SEC);          // advance the aggregate clock PAST W0 close (5min+30s)
+            h.pipe(VEHICLE, 60.0, BASE + 340 * SEC);           // advance the clock PAST W0 close (5min+30s)
             h.pipe(VEHICLE, 150.0, BASE + 260 * SEC);          // arrives after grace for W0 -> dropped from W0
             h.flush(VEHICLE, FLUSH_TS);
 
@@ -158,6 +144,35 @@ class AnomalyTopologyTest {
         List<String> second = runIdsForSpikeBurst("e2");
         assertEquals(first, second, "identical input reprocessed yields identical anomaly_ids");
         assertTrue(first.size() >= 1);
+    }
+
+    // (f) one spike + ordinary traffic -> first anomaly within two event-time minutes
+    @Test
+    void ordinaryTrafficClosesFirstSpikeWindowWithinTwoMinutesWithoutAnotherViolation() {
+        try (Harness h = new Harness("f")) {
+            long spikeTs = BASE + 10 * SEC;
+            long normalClockTs = BASE + 91 * SEC;
+            long earliestWindowStart = BASE - 4 * MIN;
+
+            h.pipe(VEHICLE, "west", 150.0, spikeTs);
+            assertTrue(h.anomaliesFor(VEHICLE).isEmpty(), "suppression holds the open spike window");
+
+            // The only later event is ordinary traffic. Its different region also proves that a
+            // non-violation cannot overwrite the violation aggregate's lastRegion.
+            h.pipe(VEHICLE, "east", 60.0, normalClockTs);
+
+            List<Anomaly> anomalies = h.anomaliesFor(VEHICLE);
+            assertEquals(1, anomalies.size(), "the earliest containing window closes on normal traffic");
+            Anomaly first = anomalies.get(0);
+            assertEquals(earliestWindowStart, first.getWindowStart().toEpochMilli());
+            assertEquals(150.0, first.getValue(), 1e-9, "normal traffic cannot change maxSpeed");
+            assertEquals("west", first.getRegion(), "normal traffic cannot change lastRegion");
+            assertEquals(
+                    AnomalyIds.thresholdAnomalyId(VEHICLE, earliestWindowStart),
+                    first.getAnomalyId(),
+                    "deterministic id is unchanged");
+            assertTrue(normalClockTs - spikeTs < 2 * MIN, "first emission clock is within two minutes");
+        }
     }
 
     private List<String> runIdsForSpikeBurst(String tag) {
@@ -182,10 +197,11 @@ class AnomalyTopologyTest {
         return config;
     }
 
-    private static VehicleEvent event(String vehicleId, double speedKph, long occurredAtMillis) {
+    private static VehicleEvent event(
+            String vehicleId, String region, double speedKph, long occurredAtMillis) {
         return VehicleEvent.newBuilder()
                 .setEventId(UUID.randomUUID())
-                .setVehicleId(vehicleId).setRegion("west").setLat(0).setLon(0)
+                .setVehicleId(vehicleId).setRegion(region).setLat(0).setLon(0)
                 .setSpeedKph(speedKph).setHeadingDeg(0)
                 .setStatus(VehicleStatus.ACTIVE)
                 .setOccurredAt(Instant.ofEpochMilli(occurredAtMillis))
@@ -217,12 +233,19 @@ class AnomalyTopologyTest {
         }
 
         void pipe(String vehicleId, double speedKph, long occurredAtMillis) {
-            input.pipeInput(vehicleId, event(vehicleId, speedKph, occurredAtMillis), Instant.ofEpochMilli(occurredAtMillis));
+            pipe(vehicleId, "west", speedKph, occurredAtMillis);
         }
 
-        /** Final flush: a > 120 event on the same key, far future — reaches suppress, evicts closed windows. */
+        void pipe(String vehicleId, String region, double speedKph, long occurredAtMillis) {
+            input.pipeInput(
+                    vehicleId,
+                    event(vehicleId, region, speedKph, occurredAtMillis),
+                    Instant.ofEpochMilli(occurredAtMillis));
+        }
+
+        /** Final flush: normal traffic on the same key, far future — evicts closed violation windows. */
         void flush(String vehicleId, long occurredAtMillis) {
-            pipe(vehicleId, 200.0, occurredAtMillis);
+            pipe(vehicleId, 60.0, occurredAtMillis);
         }
 
         List<Anomaly> anomaliesFor(String vehicleId) {

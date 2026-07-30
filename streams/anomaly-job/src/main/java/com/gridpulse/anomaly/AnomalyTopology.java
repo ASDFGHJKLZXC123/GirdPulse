@@ -29,9 +29,9 @@ import org.apache.kafka.streams.state.WindowStore;
  *
  * <pre>
  *   stream(fleet.vehicle-events)
- *     -> filter(speed_kph > 120.0)
+ *     -> filter(non-null event; all valid events continue)
  *     -> groupByKey -> windowedBy(hopping 5min/1min, grace 30s)
- *     -> aggregate({violationCount, maxSpeed, lastRegion})
+ *     -> aggregate({violationCount, maxSpeed, lastRegion}; mutate only when speed_kph > 120.0)
  *     -> suppress(untilWindowCloses(unbounded))
  *     -> map to Anomaly (deterministic UUIDv5 id)
  *     -> to(fleet.anomalies) keyed by vehicle_id
@@ -82,13 +82,17 @@ public final class AnomalyTopology {
                 .advanceBy(WINDOW_ADVANCE);
 
         final KTable<Windowed<String>, ViolationAggregate> windowed = events
-                .filter((vehicleId, event) -> event.getSpeedKph() > SPEED_THRESHOLD)
+                // Retain the existing filter node for deployment/state-name compatibility, but let
+                // every valid event advance the downstream window and suppression clocks.
+                .filter((vehicleId, event) -> event != null)
                 .groupByKey(Grouped.with(keySerde, eventSerde))
                 .windowedBy(windows)
                 .aggregate(
                         ViolationAggregate::empty,
                         (vehicleId, event, aggregate) ->
-                                aggregate.add(event.getSpeedKph(), event.getRegion()),
+                                event.getSpeedKph() > SPEED_THRESHOLD
+                                        ? aggregate.add(event.getSpeedKph(), event.getRegion())
+                                        : aggregate,
                         Materialized.<String, ViolationAggregate, WindowStore<Bytes, byte[]>>as(STORE_NAME)
                                 .withKeySerde(keySerde)
                                 .withValueSerde(aggregateSerde))
