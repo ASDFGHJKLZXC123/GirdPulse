@@ -1,0 +1,59 @@
+{
+  "type": "record",
+  "name": "VehicleEvent",
+  "namespace": "com.gridpulse.events",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      }
+    },
+    {
+      "name": "vehicle_id",
+      "type": "string"
+    },
+    {
+      "name": "region",
+      "type": "string"
+    },
+    {
+      "name": "lat",
+      "type": "double"
+    },
+    {
+      "name": "lon",
+      "type": "double"
+    },
+    {
+      "name": "speed_kph",
+      "type": "double"
+    },
+    {
+      "name": "heading_deg",
+      "type": "double"
+    },
+    {
+      "name": "battery_pct",
+      "type": ["null", "double"],
+      "doc": "State of charge 0-100. Added in v2 (2026)."
+    },
+    {
+      "name": "status",
+      "type": {
+        "type": "enum",
+        "name": "VehicleStatus",
+        "symbols": ["ACTIVE", "IDLE", "OFFLINE"]
+      },
+      "doc": "DEPRECATED since v2: to be superseded by a richer state model in v3. Removal no earlier than v4. See docs/DEPRECATION.md."
+    },
+    {
+      "name": "occurred_at",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      }
+    }
+  ]
+}
