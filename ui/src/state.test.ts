@@ -25,6 +25,7 @@ function vehicle(id: string): Vehicle {
       lon: -122.34,
       speedKph: 20,
       headingDeg: 180,
+      batteryPct: 61.5,
       updatedAt: '2026-07-29T11:59:50.000Z',
     },
   };
@@ -94,6 +95,22 @@ describe('patchVehicleMovement', () => {
       },
     });
     expect(sea.position.speedKph).toBe(20);
+  });
+
+  it('preserves the existing battery, numeric or null, across a movement patch', () => {
+    const charged = vehicle('vehicle-sea');
+    const unknown = {
+      ...vehicle('vehicle-sfo'),
+      position: { ...vehicle('vehicle-sfo').position, batteryPct: null },
+    };
+
+    const patched = patchVehicleMovements(
+      [charged, unknown],
+      [movement(charged.id), movement(unknown.id)],
+    );
+
+    expect(patched[0]?.position.batteryPct).toBe(61.5);
+    expect(patched[1]?.position.batteryPct).toBeNull();
   });
 
   it('preserves the array when the event has no loaded vehicle', () => {
@@ -178,6 +195,47 @@ describe('mergeVehicleRefresh', () => {
     };
 
     expect(mergeVehicleRefresh([stale, vehicle('vehicle-old')], [refreshed])).toEqual([refreshed]);
+  });
+
+  it('keeps the newer local coordinates while accepting the refreshed battery', () => {
+    const current = {
+      ...vehicle('vehicle-sea'),
+      position: {
+        ...vehicle('vehicle-sea').position,
+        lat: 47.7,
+        updatedAt: '2026-07-29T12:00:05.000Z',
+      },
+    };
+    const refreshed = {
+      ...vehicle('vehicle-sea'),
+      position: {
+        ...vehicle('vehicle-sea').position,
+        batteryPct: 42.25,
+      },
+    };
+
+    expect(mergeVehicleRefresh([current], [refreshed])).toEqual([
+      {
+        ...refreshed,
+        position: {
+          ...current.position,
+          batteryPct: 42.25,
+        },
+      },
+    ]);
+  });
+
+  it('treats a battery-only difference as a change', () => {
+    const current = vehicle('vehicle-sea');
+    const refreshed = {
+      ...current,
+      position: { ...current.position, batteryPct: null },
+    };
+
+    const merged = mergeVehicleRefresh([current], [refreshed]);
+
+    expect(merged[0]).not.toBe(current);
+    expect(merged[0]?.position.batteryPct).toBeNull();
   });
 
   it('preserves state identity when a refresh contains no changes', () => {

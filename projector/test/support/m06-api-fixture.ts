@@ -40,6 +40,7 @@ function vehicleEvent(overrides: Partial<VehicleEvent> = {}): VehicleEvent {
     lon: -122.3321,
     speed_kph: 42.5,
     heading_deg: 90,
+    battery_pct: null,
     status: 'ACTIVE',
     occurred_at: Date.parse('2026-07-24T12:00:00.000Z'),
     ...overrides,
@@ -86,10 +87,13 @@ async function seed(pool: Pool): Promise<void> {
         occurred_at: Date.parse('2026-07-24T12:01:00.000Z'),
         speed_kph: 42,
       }),
+      // The newest veh-sea-1 event is a v2 record; veh-sea-2 stays v1/null so the
+      // API surfaces both a numeric and a null battery.
       vehicleEvent({
         event_id: '10000000-0000-4000-8000-000000000003',
         occurred_at: Date.parse('2026-07-24T12:02:00.000Z'),
         speed_kph: 43,
+        battery_pct: 61.5,
       }),
       vehicleEvent({
         event_id: '10000000-0000-4000-8000-000000000004',

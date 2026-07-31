@@ -11,6 +11,7 @@ export interface Position {
   lon: number;
   speedKph: number;
   headingDeg: number;
+  batteryPct: number | null;
   updatedAt: DateTime;
 }
 

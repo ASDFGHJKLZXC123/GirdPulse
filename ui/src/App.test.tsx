@@ -29,6 +29,7 @@ const vehicle: Vehicle = {
     lon: -122.34,
     speedKph: 38,
     headingDeg: 90,
+    batteryPct: 61.5,
     updatedAt: '2026-07-29T12:00:00.000Z',
   },
 };

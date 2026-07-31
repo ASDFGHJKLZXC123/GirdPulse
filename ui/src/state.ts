@@ -20,6 +20,7 @@ function sameVehicle(left: Vehicle, right: Vehicle): boolean {
     left.position.lon === right.position.lon &&
     left.position.speedKph === right.position.speedKph &&
     left.position.headingDeg === right.position.headingDeg &&
+    left.position.batteryPct === right.position.batteryPct &&
     left.position.updatedAt === right.position.updatedAt
   );
 }
@@ -99,9 +100,14 @@ export function mergeVehicleRefresh(current: Vehicle[], refreshed: readonly Vehi
       existing &&
       Date.parse(existing.position.updatedAt) > Date.parse(vehicle.position.updatedAt)
     ) {
+      // The subscription only carries coordinates, so keep the newer local fix
+      // but take batteryPct from the refresh, which is the only source for it.
       candidate = {
         ...vehicle,
-        position: existing.position,
+        position: {
+          ...existing.position,
+          batteryPct: vehicle.position.batteryPct,
+        },
       };
     }
 

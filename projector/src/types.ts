@@ -26,6 +26,7 @@ export interface VehicleEvent {
   lon: number;
   speed_kph: number;
   heading_deg: number;
+  battery_pct: number | null;
   status: string;
   occurred_at: TimestampValue;
 }
@@ -99,6 +100,19 @@ function requireNumber(record: Record<string, unknown>, field: string): number {
   return value;
 }
 
+// v1 writers omit the field entirely and v2 writers may send an explicit null;
+// both normalize to null so a mixed-version stream stays decodable.
+function optionalNumber(record: Record<string, unknown>, field: string): number | null {
+  const value = record[field];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Decoded field ${field} is not a finite number or null`);
+  }
+  return value;
+}
+
 function requireTimestamp(record: Record<string, unknown>, field: string): TimestampValue {
   const value = record[field];
   if (value instanceof Date || typeof value === 'number' || typeof value === 'string') {
@@ -131,6 +145,7 @@ export function coerceDecodedEvent(topic: ProjectorTopic, value: unknown): Decod
       lon: requireNumber(record, 'lon'),
       speed_kph: requireNumber(record, 'speed_kph'),
       heading_deg: requireNumber(record, 'heading_deg'),
+      battery_pct: optionalNumber(record, 'battery_pct'),
       status: requireString(record, 'status'),
       occurred_at: requireTimestamp(record, 'occurred_at'),
     };

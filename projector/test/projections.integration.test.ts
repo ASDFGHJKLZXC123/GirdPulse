@@ -45,6 +45,7 @@ function vehicleEvent(overrides: Partial<VehicleEvent> = {}): VehicleEvent {
     lon: -122.3321,
     speed_kph: 42.5,
     heading_deg: 90,
+    battery_pct: null,
     status: 'ACTIVE',
     occurred_at: Date.parse('2026-07-24T12:00:00.000Z'),
     ...overrides,
@@ -84,6 +85,13 @@ async function applyEvent(event: VehicleEvent, swapCoords = false): Promise<void
   } finally {
     client.release();
   }
+}
+
+async function storedBatteryPct(): Promise<number | null> {
+  const result = await testPool.query<{ battery_pct: number | null }>(
+    `SELECT battery_pct FROM ${table('vehicle_positions')}`,
+  );
+  return result.rows[0]?.battery_pct ?? null;
 }
 
 async function resetProjectionTables(): Promise<void> {
@@ -311,6 +319,68 @@ describe.sequential('VehicleEvent projection', () => {
   });
 });
 
+describe.sequential('M08c battery column', () => {
+  it('re-runs the migration set without error and adds one nullable, defaultless column', async () => {
+    // beforeAll already applied every migration once; the projector re-executes
+    // them on each start, so a second run must be a no-op.
+    await runMigrations(testPool);
+
+    const positionColumn = await testPool.query<{
+      data_type: string;
+      is_nullable: string;
+      column_default: string | null;
+    }>(
+      `
+        SELECT data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'vehicle_positions'
+          AND column_name = 'battery_pct'
+      `,
+      [SCHEMA],
+    );
+    const historyColumn = await testPool.query(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'vehicle_events'
+          AND column_name = 'battery_pct'
+      `,
+      [SCHEMA],
+    );
+
+    expect(positionColumn.rows).toEqual([
+      { data_type: 'double precision', is_nullable: 'YES', column_default: null },
+    ]);
+    expect(historyColumn.rows).toEqual([]);
+  });
+
+  it('applies plain last-write-wins to battery, including a later null', async () => {
+    const v1 = vehicleEvent({ occurred_at: Date.parse('2026-07-24T12:00:00.000Z') });
+    const v2 = vehicleEvent({
+      battery_pct: 61.5,
+      occurred_at: Date.parse('2026-07-24T12:01:00.000Z'),
+    });
+    const older = vehicleEvent({
+      battery_pct: 12.5,
+      occurred_at: Date.parse('2026-07-24T12:00:30.000Z'),
+    });
+    const laterV1 = vehicleEvent({ occurred_at: Date.parse('2026-07-24T12:02:00.000Z') });
+
+    await applyEvent(v1);
+    expect(await storedBatteryPct()).toBeNull();
+
+    await applyEvent(v2);
+    expect(await storedBatteryPct()).toBe(61.5);
+
+    await applyEvent(older);
+    expect(await storedBatteryPct()).toBe(61.5);
+
+    // A later v1 event carries no battery at all: last-write-wins, not COALESCE.
+    await applyEvent(laterV1);
+    expect(await storedBatteryPct()).toBeNull();
+  });
+});
+
 describe.sequential('idempotent derived-topic projections', () => {
   it('upserts an anomaly by its deterministic id', async () => {
     const id = randomUUID();
@@ -477,6 +547,7 @@ describe.sequential('batch offset transaction', () => {
       status: 'ACTIVE',
       lat: 47.61,
       lon: -122.33,
+      battery_pct: 55.5,
       occurred_at: Date.parse('2026-07-24T12:00:00.000Z'),
     });
     const interrupted = vehicleEvent({
@@ -484,6 +555,7 @@ describe.sequential('batch offset transaction', () => {
       lat: 47.62,
       lon: -122.34,
       speed_kph: 0,
+      battery_pct: 88,
       occurred_at: Date.parse('2026-07-24T12:01:00.000Z'),
     });
     const batch: DecodedBatch = {
@@ -514,10 +586,11 @@ describe.sequential('batch offset transaction', () => {
       status: string;
       lat: number;
       lon: number;
+      battery_pct: number | null;
       last_offset: string;
       history_count: string;
     }>(`
-      SELECT v.status, p.lat, p.lon, o.last_offset,
+      SELECT v.status, p.lat, p.lon, p.battery_pct, o.last_offset,
              (SELECT count(*) FROM ${table('vehicle_events')}) AS history_count
       FROM ${table('vehicles')} v
       JOIN ${table('vehicle_positions')} p ON p.vehicle_id = v.id
@@ -529,6 +602,7 @@ describe.sequential('batch offset transaction', () => {
       status: committed.status,
       lat: committed.lat,
       lon: committed.lon,
+      battery_pct: committed.battery_pct,
       last_offset: '10',
       history_count: '1',
     });
@@ -546,10 +620,11 @@ describe.sequential('batch offset transaction', () => {
       status: string;
       lat: number;
       lon: number;
+      battery_pct: number | null;
       last_offset: string;
       history_count: string;
     }>(`
-      SELECT v.status, p.lat, p.lon, o.last_offset,
+      SELECT v.status, p.lat, p.lon, p.battery_pct, o.last_offset,
              (SELECT count(*) FROM ${table('vehicle_events')}) AS history_count
       FROM ${table('vehicles')} v
       JOIN ${table('vehicle_positions')} p ON p.vehicle_id = v.id
@@ -561,6 +636,7 @@ describe.sequential('batch offset transaction', () => {
       status: interrupted.status,
       lat: interrupted.lat,
       lon: interrupted.lon,
+      battery_pct: interrupted.battery_pct,
       last_offset: '11',
       history_count: '2',
     });

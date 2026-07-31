@@ -23,6 +23,7 @@ export interface Position {
   lon: number;
   speedKph: number;
   headingDeg: number;
+  batteryPct: number | null;
   updatedAt: Date;
 }
 
@@ -72,6 +73,7 @@ export interface PositionRow extends QueryResultRow {
   lon: number;
   speed_kph: number;
   heading_deg: number;
+  battery_pct: number | null;
   updated_at: Date | string;
 }
 
@@ -153,6 +155,7 @@ export function mapPosition(row: PositionRow): Position {
     lon: row.lon,
     speedKph: row.speed_kph,
     headingDeg: row.heading_deg,
+    batteryPct: row.battery_pct ?? null,
     updatedAt: toDate(row.updated_at, 'vehicle_positions.updated_at'),
   };
 }

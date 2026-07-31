@@ -11,6 +11,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'rea
 
 import { MAP_STYLE } from '../map-style.js';
 import type { RegionSelection, Vehicle } from '../types.js';
+import { createPopupContent } from './vehicle-popup.js';
 
 const SOURCE_ID = 'vehicles';
 const STATUS_LAYER_ID = 'vehicle-status';
@@ -86,34 +87,6 @@ function toFeatureCollection(
       },
     })),
   };
-}
-
-function createPopupContent(vehicle: Vehicle): HTMLDivElement {
-  const container = document.createElement('div');
-  container.className = 'vehicle-popup';
-
-  const title = document.createElement('strong');
-  title.textContent = vehicle.id;
-  container.append(title);
-
-  const details = [
-    ['Speed', `${vehicle.position.speedKph.toFixed(1)} km/h`],
-    ['Status', vehicle.status],
-    ['Last seen', vehicle.lastSeen],
-  ] as const;
-
-  for (const [label, value] of details) {
-    const row = document.createElement('div');
-    const labelNode = document.createElement('span');
-    const valueNode = document.createElement('span');
-
-    labelNode.textContent = `${label}: `;
-    valueNode.textContent = value;
-    row.append(labelNode, valueNode);
-    container.append(row);
-  }
-
-  return container;
 }
 
 export const VehicleMap = forwardRef<VehicleMapHandle, VehicleMapProps>(function VehicleMap(

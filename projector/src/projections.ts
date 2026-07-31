@@ -45,17 +45,18 @@ export async function applyVehicleEvent(
   await client.query(
     `
       INSERT INTO vehicle_positions
-        (vehicle_id, lat, lon, speed_kph, heading_deg, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (vehicle_id, lat, lon, speed_kph, heading_deg, battery_pct, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (vehicle_id) DO UPDATE SET
         lat = EXCLUDED.lat,
         lon = EXCLUDED.lon,
         speed_kph = EXCLUDED.speed_kph,
         heading_deg = EXCLUDED.heading_deg,
+        battery_pct = EXCLUDED.battery_pct,
         updated_at = EXCLUDED.updated_at
       WHERE EXCLUDED.updated_at > vehicle_positions.updated_at
     `,
-    [event.vehicle_id, lat, lon, event.speed_kph, event.heading_deg, occurredAt],
+    [event.vehicle_id, lat, lon, event.speed_kph, event.heading_deg, event.battery_pct, occurredAt],
   );
 
   await client.query(

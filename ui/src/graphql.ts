@@ -12,6 +12,7 @@ export const VEHICLES_QUERY = gql`
         lon
         speedKph
         headingDeg
+        batteryPct
         updatedAt
       }
     }

@@ -1,21 +1,37 @@
-import { GraphQLScalarType, buildSchema, introspectionFromSchema } from 'graphql';
+import {
+  GraphQLObjectType,
+  GraphQLScalarType,
+  buildSchema,
+  introspectionFromSchema,
+  type GraphQLNamedType,
+} from 'graphql';
 import { describe, expect, it } from 'vitest';
 
 import { createApiSchema } from '../src/schema.js';
+
+function assertObjectType(type: GraphQLNamedType | undefined | null): GraphQLObjectType {
+  if (!(type instanceof GraphQLObjectType)) {
+    throw new Error(`Expected an object type, received ${String(type)}`);
+  }
+  return type;
+}
 
 const EXACT_SDL = `
   scalar DateTime
   enum VehicleStatus { ACTIVE IDLE OFFLINE }
   enum AnomalyKind { SPEED_THRESHOLD SPEED_ZSCORE }
 
-  type Position { lat: Float!, lon: Float!, speedKph: Float!, headingDeg: Float!, updatedAt: DateTime! }
+  type Position { lat: Float!, lon: Float!, speedKph: Float!, headingDeg: Float!, batteryPct: Float,
+                  updatedAt: DateTime! }
   type VehicleEvent { eventId: ID!, vehicleId: ID!, lat: Float!, lon: Float!, speedKph: Float!, occurredAt: DateTime! }
   type Anomaly { id: ID!, vehicleId: ID!, region: String!, kind: AnomalyKind!, value: Float!,
                  detectorVersion: Int!, windowStart: DateTime!, windowEnd: DateTime! }
   type RegionRollup { region: String!, windowStart: DateTime!, windowEnd: DateTime!,
                       eventCount: Int!, activeVehicles: Int!, avgSpeedKph: Float! }
   type Vehicle {
-    id: ID!, region: String!, status: VehicleStatus!, lastSeen: DateTime!
+    id: ID!, region: String!
+    status: VehicleStatus! @deprecated(reason: "Will be replaced by a state model; see DEPRECATION.md")
+    lastSeen: DateTime!
     position: Position!
     recentEvents(limit: Int = 20): [VehicleEvent!]!
     anomalies(since: DateTime): [Anomaly!]!
@@ -47,6 +63,19 @@ describe('M06 schema contract', () => {
     const actual = introspectionFromSchema(createApiSchema(), introspectionOptions);
 
     expect(actual).toEqual(expected);
+  });
+
+  it('adds batteryPct as a nullable Float and deprecates Vehicle.status without removing it', () => {
+    const schema = createApiSchema();
+    const position = assertObjectType(schema.getType('Position'));
+    const vehicle = assertObjectType(schema.getType('Vehicle'));
+    const batteryPct = position.getFields().batteryPct;
+    const status = vehicle.getFields().status;
+
+    expect(String(batteryPct.type)).toBe('Float');
+    expect(batteryPct.deprecationReason).toBeFalsy();
+    expect(String(status.type)).toBe('VehicleStatus!');
+    expect(status.deprecationReason).toBe('Will be replaced by a state model; see DEPRECATION.md');
   });
 
   it('has no Mutation root and exposes only camelCase API fields', () => {
