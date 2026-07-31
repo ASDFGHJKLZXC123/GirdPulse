@@ -50,7 +50,7 @@ export function createLoaders(database: Database): RequestLoaders {
   const position = new DataLoader<string, Position>(async (vehicleIds) => {
     const result = await database.query<PositionRow>(
       `
-        SELECT vehicle_id, lat, lon, speed_kph, heading_deg, updated_at
+        SELECT vehicle_id, lat, lon, speed_kph, heading_deg, battery_pct, updated_at
         FROM vehicle_positions
         WHERE vehicle_id = ANY($1::text[])
       `,

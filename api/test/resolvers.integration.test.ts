@@ -247,6 +247,7 @@ describe.sequential('M06 PostgreSQL resolvers', () => {
         position: {
           lat: number;
           lon: number;
+          batteryPct: number | null;
         };
         recentEvents: Array<{ speedKph: number }>;
         anomalies: Array<{ kind: string; value: number }>;
@@ -258,6 +259,7 @@ describe.sequential('M06 PostgreSQL resolvers', () => {
           position {
             lat
             lon
+            batteryPct
           }
           recentEvents(limit: 5) {
             speedKph
@@ -279,6 +281,47 @@ describe.sequential('M06 PostgreSQL resolvers', () => {
       3,
     );
     expect(sqlQueryCount).toBe(4);
+  });
+
+  it('exposes battery as a nullable Float and keeps the deprecated status resolving', async () => {
+    const data = await graphqlRequest<{
+      vehicles: Array<{
+        id: string;
+        status: string;
+        position: { batteryPct: number | null };
+      }>;
+    }>(`
+      query BatteryAndDeprecatedStatus {
+        vehicles(region: "SEA") {
+          id
+          status
+          position {
+            batteryPct
+          }
+        }
+      }
+    `);
+    const stored = await fixture.pool.query<{
+      vehicle_id: string;
+      battery_pct: number | null;
+    }>(
+      `
+        SELECT vehicle_id, battery_pct
+        FROM vehicle_positions
+        WHERE vehicle_id = ANY($1::text[])
+        ORDER BY vehicle_id
+      `,
+      [['veh-sea-1', 'veh-sea-2']],
+    );
+
+    expect(stored.rows).toEqual([
+      { vehicle_id: 'veh-sea-1', battery_pct: 61.5 },
+      { vehicle_id: 'veh-sea-2', battery_pct: null },
+    ]);
+    expect([...data.vehicles].sort((left, right) => left.id.localeCompare(right.id))).toEqual([
+      { id: 'veh-sea-1', status: 'ACTIVE', position: { batteryPct: 61.5 } },
+      { id: 'veh-sea-2', status: 'IDLE', position: { batteryPct: null } },
+    ]);
   });
 
   it('keeps recentEvents limit and anomalies since values in loader identity', async () => {
